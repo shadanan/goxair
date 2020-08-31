@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"net"
+	"time"
 )
 
 // XAir client
@@ -15,12 +17,6 @@ type pubsub struct {
 	sub   chan chan Message
 	unsub chan chan Message
 	st    chan struct{}
-}
-
-type connectionClosed struct{}
-
-func (e connectionClosed) Error() string {
-	return "connection closed"
 }
 
 // NewXAir creates a new XAir client.
@@ -46,7 +42,7 @@ func (xair XAir) Start() {
 
 	for {
 		msg, err := xair.receive()
-		if err == (connectionClosed{}) {
+		if errors.Is(err, ErrConnClosed) {
 			return
 		}
 		xair.ps.publish(msg)
@@ -69,11 +65,20 @@ func (xair XAir) Unsubscribe(ch chan Message) {
 }
 
 // Get the value of an address from the XAir device.
-func (xair XAir) Get(address string) Message {
+func (xair XAir) Get(address string) (Message, error) {
 	sub := xair.Subscribe()
 	defer xair.Unsubscribe(sub)
 	xair.Send(Message{Address: address})
-	return <-sub
+	for {
+		select {
+		case msg := <-sub:
+			if msg.Address == address {
+				return msg, nil
+			}
+		case <-time.After(1 * time.Second):
+			return Message{}, ErrTimeout
+		}
+	}
 }
 
 // Send a message to the XAir device.
@@ -89,7 +94,7 @@ func (xair XAir) receive() (Message, error) {
 	data := make([]byte, 65535)
 	_, err := xair.conn.Read(data)
 	if err != nil {
-		return Message{}, connectionClosed{}
+		return Message{}, ErrConnClosed
 	}
 
 	msg, err := ParseMessage(data)

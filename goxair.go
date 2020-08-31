@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -14,8 +17,17 @@ func xairsGet(c *gin.Context) {
 }
 
 func oscGet(c *gin.Context) {
+	xairName := c.Param("xair")
 	address := c.Param("address")
-	msg := xair.Get(address)
+
+	msg, err := xair.Get(address)
+	if errors.Is(err, ErrTimeout) {
+		c.JSON(404, gin.H{
+			"error": fmt.Sprintf("%s not found on %s", address, xairName),
+		})
+		return
+	}
+
 	c.JSON(200, gin.H{
 		"address":   msg.Address,
 		"arguments": msg.Arguments,
