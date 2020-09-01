@@ -3,13 +3,15 @@ package main
 import (
 	"errors"
 	"net"
+	"strings"
 	"time"
 )
 
 // XAir client
 type XAir struct {
-	conn *net.UDPConn
-	ps   pubsub
+	conn  *net.UDPConn
+	ps    pubsub
+	cache map[string]Message
 }
 
 type pubsub struct {
@@ -32,13 +34,24 @@ func NewXAir(address string) XAir {
 	}
 
 	ps := newPubsub()
-	return XAir{conn, ps}
+	cache := make(map[string]Message)
+	return XAir{conn, ps, cache}
 }
 
 // Start polling for messages and publish when they are received.
 func (xair XAir) Start() {
 	go xair.ps.start()
 	defer xair.ps.stop()
+
+	cacheSub := xair.Subscribe()
+	defer xair.Unsubscribe(cacheSub)
+	go func() {
+		for msg := range cacheSub {
+			if !strings.HasPrefix(msg.Address, "/meters/") {
+				xair.cache[msg.Address] = msg
+			}
+		}
+	}()
 
 	for {
 		msg, err := xair.receive()
@@ -66,6 +79,9 @@ func (xair XAir) Unsubscribe(ch chan Message) {
 
 // Get the value of an address from the XAir device.
 func (xair XAir) Get(address string) (Message, error) {
+	if msg, ok := xair.cache[address]; ok {
+		return msg, nil
+	}
 	sub := xair.Subscribe()
 	defer xair.Unsubscribe(sub)
 	xair.Send(Message{Address: address})
@@ -116,13 +132,13 @@ func newPubsub() pubsub {
 
 // Start the PubSub go routine.
 func (ps pubsub) start() {
-	subs := map[chan Message]struct{}{}
+	subs := make(map[chan Message]struct{})
 	for {
 		select {
-		case msg := <-ps.sub:
-			subs[msg] = struct{}{}
-		case msg := <-ps.unsub:
-			delete(subs, msg)
+		case sub := <-ps.sub:
+			subs[sub] = struct{}{}
+		case sub := <-ps.unsub:
+			delete(subs, sub)
 		case msg := <-ps.pub:
 			for sub := range subs {
 				sub <- msg

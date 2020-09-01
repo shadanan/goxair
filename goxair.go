@@ -36,7 +36,7 @@ func oscGet(c *gin.Context) {
 }
 
 func main() {
-	xair = NewXAir("192.168.86.48:10024")
+	xair = NewXAir("192.168.86.46:10024")
 	go xair.Start()
 	r := gin.Default()
 	r.GET("/api/xairs", xairsGet)
