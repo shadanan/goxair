@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -9,9 +10,11 @@ import (
 
 // XAir client
 type XAir struct {
-	conn  *net.UDPConn
-	ps    pubsub
-	cache map[string]Message
+	conn   *net.UDPConn
+	ps     pubsub
+	cache  map[string]Message
+	name   string
+	meters Arguments
 }
 
 type pubsub struct {
@@ -22,7 +25,7 @@ type pubsub struct {
 }
 
 // NewXAir creates a new XAir client.
-func NewXAir(address string) XAir {
+func NewXAir(address string, name string, meters []int) XAir {
 	raddr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		panic(err.Error())
@@ -35,23 +38,29 @@ func NewXAir(address string) XAir {
 
 	ps := newPubsub()
 	cache := make(map[string]Message)
-	return XAir{conn, ps, cache}
+
+	meterArgs := make([]Argument, len(meters))
+	for i, meter := range meters {
+		meterArgs[i] = String(fmt.Sprintf("/meters/%d", meter))
+	}
+
+	return XAir{conn, ps, cache, name, meterArgs}
 }
 
 // Start polling for messages and publish when they are received.
 func (xair XAir) Start() {
+	defer Log.Info.Printf("connection to %s closed\n", xair.name)
+
 	go xair.ps.start()
 	defer xair.ps.stop()
 
-	cacheSub := xair.Subscribe()
-	defer xair.Unsubscribe(cacheSub)
-	go func() {
-		for msg := range cacheSub {
-			if !strings.HasPrefix(msg.Address, "/meters/") {
-				xair.cache[msg.Address] = msg
-			}
-		}
-	}()
+	updateSub := xair.Subscribe()
+	go xair.update(updateSub)
+	defer xair.Unsubscribe(updateSub)
+
+	stopRefresh := make(chan struct{})
+	go xair.refresh(stopRefresh)
+	defer close(stopRefresh)
 
 	for {
 		msg, err := xair.receive()
@@ -62,18 +71,58 @@ func (xair XAir) Start() {
 	}
 }
 
+func (xair XAir) refresh(stop chan struct{}) {
+	defer Log.Debug.Printf("%s refresh goroutine terminated\n", xair.name)
+
+	for {
+		xair.Send(Message{Address: "/xinfo"})
+		xair.Send(Message{Address: "/xremote"})
+		for _, meter := range xair.meters {
+			xair.Send(Message{Address: "/meters", Arguments: Arguments{meter}})
+		}
+
+		select {
+		case <-stop:
+			return
+		case <-time.After(5 * time.Second):
+			continue
+		}
+	}
+}
+
+func (xair XAir) update(sub chan Message) {
+	defer Log.Debug.Printf("%s update goroutine terminated\n", xair.name)
+
+	for msg := range sub {
+		if !strings.HasPrefix(msg.Address, "/meters/") {
+			if msg.Address == "/xinfo" {
+				Log.Debug.Printf("received from %s: %s\n", xair.name, msg)
+				xair.name = msg.Arguments[1].String()
+			} else {
+				Log.Info.Printf("received from %s: %s\n", xair.name, msg)
+			}
+
+			xair.cache[msg.Address] = msg
+		}
+	}
+}
+
 // Close the connection to the XAir and shutdown all channels.
 func (xair XAir) Close() {
+	Log.Debug.Printf("closing connection to %s", xair.name)
 	xair.conn.Close()
 }
 
 // Subscribe to messages received from the XAir device.
 func (xair XAir) Subscribe() chan Message {
-	return xair.ps.subscribe()
+	ch := xair.ps.subscribe()
+	Log.Debug.Printf("subscribing %p to %s", ch, xair.name)
+	return ch
 }
 
 // Unsubscribe from messages from the XAir device.
 func (xair XAir) Unsubscribe(ch chan Message) {
+	Log.Debug.Printf("unsubscribing %p from %s", ch, xair.name)
 	xair.ps.unsubscribe(ch)
 }
 
@@ -99,9 +148,10 @@ func (xair XAir) Get(address string) (Message, error) {
 
 // Send a message to the XAir device.
 func (xair XAir) Send(msg Message) {
+	Log.Debug.Printf("sending to %s: %s\n", xair.name, msg)
 	_, err := xair.conn.Write(msg.Bytes())
 	if err != nil {
-		panic(err.Error())
+		Log.Warn.Printf("cannot send to %s because connection is closed\n", xair.name)
 	}
 }
 
