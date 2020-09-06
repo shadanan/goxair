@@ -49,7 +49,7 @@ func NewXAir(address string, name string, meters []int) XAir {
 
 // Start polling for messages and publish when they are received.
 func (xair XAir) Start() {
-	defer Log.Info.Printf("connection to %s closed\n", xair.name)
+	defer Log.Info.Printf("connection to %s closed", xair.name)
 
 	go xair.ps.start()
 	defer xair.ps.stop()
@@ -72,7 +72,7 @@ func (xair XAir) Start() {
 }
 
 func (xair XAir) refresh(stop chan struct{}) {
-	defer Log.Debug.Printf("%s refresh goroutine terminated\n", xair.name)
+	defer Log.Debug.Printf("%s refresh goroutine terminated", xair.name)
 
 	for {
 		xair.Send(Message{Address: "/xinfo"})
@@ -91,15 +91,15 @@ func (xair XAir) refresh(stop chan struct{}) {
 }
 
 func (xair XAir) update(sub chan Message) {
-	defer Log.Debug.Printf("%s update goroutine terminated\n", xair.name)
+	defer Log.Debug.Printf("%s update goroutine terminated", xair.name)
 
 	for msg := range sub {
 		if !strings.HasPrefix(msg.Address, "/meters/") {
 			if msg.Address == "/xinfo" {
-				Log.Debug.Printf("received from %s: %s\n", xair.name, msg)
+				Log.Debug.Printf("received from %s: %s", xair.name, msg)
 				xair.name = msg.Arguments[1].String()
 			} else {
-				Log.Info.Printf("received from %s: %s\n", xair.name, msg)
+				Log.Info.Printf("received from %s: %s", xair.name, msg)
 			}
 
 			xair.cache[msg.Address] = msg
@@ -109,20 +109,20 @@ func (xair XAir) update(sub chan Message) {
 
 // Close the connection to the XAir and shutdown all channels.
 func (xair XAir) Close() {
-	Log.Debug.Printf("closing connection to %s", xair.name)
+	Log.Info.Printf("closing connection to %s", xair.name)
 	xair.conn.Close()
 }
 
 // Subscribe to messages received from the XAir device.
 func (xair XAir) Subscribe() chan Message {
 	ch := xair.ps.subscribe()
-	Log.Debug.Printf("subscribing %p to %s", ch, xair.name)
+	Log.Info.Printf("subscribing %p to %s", ch, xair.name)
 	return ch
 }
 
 // Unsubscribe from messages from the XAir device.
 func (xair XAir) Unsubscribe(ch chan Message) {
-	Log.Debug.Printf("unsubscribing %p from %s", ch, xair.name)
+	Log.Info.Printf("unsubscribing %p from %s", ch, xair.name)
 	xair.ps.unsubscribe(ch)
 }
 
@@ -148,10 +148,10 @@ func (xair XAir) Get(address string) (Message, error) {
 
 // Send a message to the XAir device.
 func (xair XAir) Send(msg Message) {
-	Log.Debug.Printf("sending to %s: %s\n", xair.name, msg)
+	Log.Debug.Printf("sending to %s: %s", xair.name, msg)
 	_, err := xair.conn.Write(msg.Bytes())
 	if err != nil {
-		Log.Warn.Printf("cannot send to %s because connection is closed\n", xair.name)
+		Log.Warn.Printf("cannot send to %s because connection is closed", xair.name)
 	}
 }
 
