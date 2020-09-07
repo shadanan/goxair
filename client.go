@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -168,7 +170,38 @@ func (xair XAir) receive() (Message, error) {
 		panic(err.Error())
 	}
 
+	if strings.HasPrefix(msg.Address, "/meters/") {
+		blob, err := msg.Arguments[0].ReadBlob()
+		if err != nil {
+			panic(err.Error())
+		}
+		msg.Arguments = decodeMeter(blob)
+	}
+
 	return msg, nil
+}
+
+func decodeMeter(blob []byte) []Argument {
+	buffer := bytes.NewBuffer(blob)
+
+	var size int32
+	err := binary.Read(buffer, binary.LittleEndian, &size)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	meter := make([]Argument, size)
+	for i := 0; i < int(size); i++ {
+		var value int16
+		err := binary.Read(buffer, binary.LittleEndian, &value)
+		if err != nil {
+			panic(err.Error())
+		}
+
+		meter[i] = Int(value)
+	}
+
+	return meter
 }
 
 func newPubsub() pubsub {
