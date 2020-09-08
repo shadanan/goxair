@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -20,9 +19,13 @@ var upgrader = websocket.Upgrader{
 }
 
 func xairsGet(c *gin.Context) {
-	xairs := []string{}
+	var keys []string
+	for key := range xairs {
+		keys = append(keys, key)
+	}
+
 	c.JSON(200, gin.H{
-		"xairs": xairs,
+		"xairs": keys,
 	})
 }
 
@@ -41,7 +44,6 @@ func oscGet(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"address":   msg.Address,
 		"arguments": msg.Arguments,
-		"xair":      xair.name,
 	})
 }
 
@@ -61,7 +63,6 @@ func oscPatch(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"address":   msg.Address,
 		"arguments": msg.Arguments,
-		"xair":      xair.name,
 	})
 }
 
@@ -97,7 +98,6 @@ func oscWs(c *gin.Context) {
 			err := ws.WriteJSON(gin.H{
 				"address":   msg.Address,
 				"arguments": msg.Arguments,
-				"xair":      xair.name,
 			})
 			if err != nil {
 				Log.Warn.Printf("Error writing json: %+v", err)
@@ -110,11 +110,6 @@ func main() {
 	xair := NewXAir("192.168.86.98:10024", "XR18-5E-91-5A", []int{2, 3, 5})
 	go xair.Start()
 	xairs["XR18-5E-91-5A"] = xair
-
-	go func() {
-		<-time.After(2 * time.Second)
-		xair.Set("/lr/mix/on", Arguments{Float(0)})
-	}()
 
 	r := gin.Default()
 	r.GET("/api/xairs", xairsGet)
