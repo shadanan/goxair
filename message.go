@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -40,6 +41,31 @@ func ParseMessage(data []byte) (Message, error) {
 	msg.Arguments = args
 
 	return msg, nil
+}
+
+// UnmarshalJSON unmarshal's the JSON data into a typed message.
+func (msg *Message) UnmarshalJSON(data []byte) error {
+	var r interface{}
+	if err := json.Unmarshal(data, &r); err != nil {
+		panic(err.Error())
+	}
+
+	raw := r.(map[string]interface{})
+
+	msg.Address = raw["address"].(string)
+	for _, arg := range raw["arguments"].([]interface{}) {
+		switch val := arg.(type) {
+		case float64:
+			msg.Arguments = append(msg.Arguments, Float(val))
+		case int:
+			msg.Arguments = append(msg.Arguments, Int(val))
+		case string:
+			msg.Arguments = append(msg.Arguments, String(val))
+		default:
+			Log.Error.Panicf("Unknown type for %+v.", val)
+		}
+	}
+	return nil
 }
 
 // Bytes returns the contents of the message as a slice of bytes.

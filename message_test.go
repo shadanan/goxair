@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/ioutil"
 	"testing"
 
@@ -266,5 +267,22 @@ func TestParseMessage(t *testing.T) {
 			}
 		} else {
 		}
+	}
+}
+
+func TestUnmarshalJSON(t *testing.T) {
+	data := `{
+		"address": "/lr/mix/fader",
+		"arguments": [0, "A"]
+	}`
+
+	got := Message{}
+	json.Unmarshal([]byte(data), &got)
+	expected := Message{
+		Address:   "/lr/mix/fader",
+		Arguments: Arguments{Float(0), String("A")},
+	}
+	if !expected.Equal(got) {
+		t.Fatalf("expected %+v, got %+v", expected, got)
 	}
 }

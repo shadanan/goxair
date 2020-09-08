@@ -1,15 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
-var xair XAir
+var xairs = make(map[string]XAir)
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -25,13 +27,13 @@ func xairsGet(c *gin.Context) {
 }
 
 func oscGet(c *gin.Context) {
-	xairName := c.Param("xair")
+	xair := xairs[c.Param("xair")]
 	address := c.Param("address")
 
 	msg, err := xair.Get(address)
 	if errors.Is(err, ErrTimeout) {
 		c.JSON(404, gin.H{
-			"error": fmt.Sprintf("%s not found on %s", address, xairName),
+			"error": fmt.Sprintf("%s not found on %s", address, xair.name),
 		})
 		return
 	}
@@ -43,10 +45,32 @@ func oscGet(c *gin.Context) {
 	})
 }
 
-func oscWs(w http.ResponseWriter, r *http.Request) {
-	ws, err := upgrader.Upgrade(w, r, nil)
+func oscPatch(c *gin.Context) {
+	xair := xairs[c.Param("xair")]
+
+	data, err := c.GetRawData()
 	if err != nil {
-		Log.Warn.Printf("failed to upgrade websocket: %+v", err)
+		panic(err.Error())
+	}
+
+	msg := Message{}
+	json.Unmarshal(data, &msg)
+
+	xair.Set(msg.Address, msg.Arguments)
+
+	c.JSON(200, gin.H{
+		"address":   msg.Address,
+		"arguments": msg.Arguments,
+		"xair":      xair.name,
+	})
+}
+
+func oscWs(c *gin.Context) {
+	xair := xairs[c.Param("xair")]
+
+	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		Log.Warn.Printf("Failed to upgrade websocket: %+v", err)
 		return
 	}
 	defer ws.Close()
@@ -76,21 +100,27 @@ func oscWs(w http.ResponseWriter, r *http.Request) {
 				"xair":      xair.name,
 			})
 			if err != nil {
-				Log.Warn.Printf("error writing json: %+v", err)
+				Log.Warn.Printf("Error writing json: %+v", err)
 			}
 		}
 	}
 }
 
 func main() {
-	xair = NewXAir("192.168.86.98:10024", "XR18-5E-91-5A", []int{2, 3, 5})
+	xair := NewXAir("192.168.86.98:10024", "XR18-5E-91-5A", []int{2, 3, 5})
 	go xair.Start()
+	xairs["XR18-5E-91-5A"] = xair
+
+	go func() {
+		<-time.After(2 * time.Second)
+		xair.Set("/lr/mix/on", Arguments{Float(0)})
+	}()
 
 	r := gin.Default()
 	r.GET("/api/xairs", xairsGet)
 	r.GET("/api/xairs/:xair/addresses/*address", oscGet)
-	r.GET("/ws/xairs/:xair/addresses", func(c *gin.Context) {
-		oscWs(c.Writer, c.Request)
-	})
+	r.PATCH("/api/xairs/:xair/addresses/*address", oscPatch)
+	r.GET("/ws/xairs/:xair/addresses", oscWs)
+
 	r.Run()
 }

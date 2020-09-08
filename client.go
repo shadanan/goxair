@@ -51,7 +51,7 @@ func NewXAir(address string, name string, meters []int) XAir {
 
 // Start polling for messages and publish when they are received.
 func (xair XAir) Start() {
-	defer Log.Info.Printf("connection to %s closed", xair.name)
+	defer Log.Info.Printf("Connection to %s closed.", xair.name)
 
 	go xair.ps.start()
 	defer xair.ps.stop()
@@ -74,13 +74,13 @@ func (xair XAir) Start() {
 }
 
 func (xair XAir) refresh(stop chan struct{}) {
-	defer Log.Debug.Printf("%s refresh goroutine terminated", xair.name)
+	defer Log.Debug.Printf("%s refresh goroutine terminated.", xair.name)
 
 	for {
-		xair.Send(Message{Address: "/xinfo"})
-		xair.Send(Message{Address: "/xremote"})
+		xair.send(Message{Address: "/xinfo"})
+		xair.send(Message{Address: "/xremote"})
 		for _, meter := range xair.meters {
-			xair.Send(Message{Address: "/meters", Arguments: Arguments{meter}})
+			xair.send(Message{Address: "/meters", Arguments: Arguments{meter}})
 		}
 
 		select {
@@ -93,15 +93,15 @@ func (xair XAir) refresh(stop chan struct{}) {
 }
 
 func (xair XAir) update(sub chan Message) {
-	defer Log.Debug.Printf("%s update goroutine terminated", xair.name)
+	defer Log.Debug.Printf("%s update goroutine terminated.", xair.name)
 
 	for msg := range sub {
 		if !strings.HasPrefix(msg.Address, "/meters/") {
 			if msg.Address == "/xinfo" {
-				Log.Debug.Printf("received from %s: %s", xair.name, msg)
+				Log.Debug.Printf("Received from %s: %s", xair.name, msg)
 				xair.name = msg.Arguments[1].String()
 			} else {
-				Log.Info.Printf("received from %s: %s", xair.name, msg)
+				Log.Info.Printf("Received from %s: %s", xair.name, msg)
 			}
 
 			xair.cache[msg.Address] = msg
@@ -111,53 +111,62 @@ func (xair XAir) update(sub chan Message) {
 
 // Close the connection to the XAir and shutdown all channels.
 func (xair XAir) Close() {
-	Log.Info.Printf("closing connection to %s", xair.name)
+	Log.Info.Printf("Closing connection to %s.", xair.name)
 	xair.conn.Close()
 }
 
 // Subscribe to messages received from the XAir device.
 func (xair XAir) Subscribe() chan Message {
 	ch := xair.ps.subscribe()
-	Log.Info.Printf("subscribing %p to %s", ch, xair.name)
+	Log.Info.Printf("Subscribing %p to %s.", ch, xair.name)
 	return ch
 }
 
 // Unsubscribe from messages from the XAir device.
 func (xair XAir) Unsubscribe(ch chan Message) {
-	Log.Info.Printf("unsubscribing %p from %s", ch, xair.name)
+	Log.Info.Printf("Unsubscribing %p from %s.", ch, xair.name)
 	xair.ps.unsubscribe(ch)
 }
 
-// Get the value of an address from the XAir device.
+// Get the value of an address on the XAir device.
 func (xair XAir) Get(address string) (Message, error) {
 	if msg, ok := xair.cache[address]; ok {
+		Log.Info.Printf("Get on %s (cached): %s", xair.name, msg)
 		return msg, nil
 	}
 	sub := xair.Subscribe()
 	defer xair.Unsubscribe(sub)
-	xair.Send(Message{Address: address})
+	xair.send(Message{Address: address})
 	for {
 		select {
 		case msg := <-sub:
 			if msg.Address == address {
+				Log.Info.Printf("Get on %s: %s", xair.name, msg)
 				return msg, nil
 			}
 		case <-time.After(1 * time.Second):
+			Log.Info.Printf("Get timed out on %s: %s", xair.name, address)
 			return Message{}, ErrTimeout
 		}
 	}
 }
 
-// Send a message to the XAir device.
-func (xair XAir) Send(msg Message) {
-	Log.Debug.Printf("sending to %s: %s", xair.name, msg)
+// Set the value of an address on the XAir device.
+func (xair XAir) Set(address string, arguments Arguments) {
+	msg := Message{Address: address, Arguments: arguments}
+	Log.Info.Printf("Set on %s: %s", xair.name, msg)
+	xair.cache[msg.Address] = msg
+	xair.send(msg)
+}
+
+func (xair XAir) send(msg Message) {
+	Log.Debug.Printf("Send to %s: %s", xair.name, msg)
 	_, err := xair.conn.Write(msg.Bytes())
 	if err != nil {
-		Log.Warn.Printf("cannot send to %s because connection is closed", xair.name)
+		Log.Warn.Printf("Cannot send to %s because connection is closed.", xair.name)
 	}
 }
 
-// Receive a message from the XAir device.
 func (xair XAir) receive() (Message, error) {
 	data := make([]byte, 65535)
 	_, err := xair.conn.Read(data)
