@@ -19,14 +19,48 @@ var upgrader = websocket.Upgrader{
 }
 
 func xairsGet(c *gin.Context) {
-	var keys []string
-	for key := range scanner.xairs {
-		keys = append(keys, key)
-	}
-
 	c.JSON(200, gin.H{
-		"xairs": keys,
+		"xairs": scanner.List(),
 	})
+}
+
+func xairsWs(c *gin.Context) {
+	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		Log.Warn.Printf("Failed to upgrade websocket: %+v", err)
+		return
+	}
+	defer ws.Close()
+
+	stopWebsocket := make(chan struct{})
+	go func() {
+		for {
+			_, _, err := ws.ReadMessage()
+			if err != nil {
+				break
+			}
+		}
+		close(stopWebsocket)
+	}()
+
+	sub := scanner.Subscribe()
+	defer scanner.Unsubscribe(sub)
+
+	for {
+		err := ws.WriteJSON(gin.H{
+			"xairs": scanner.List(),
+		})
+		if err != nil {
+			Log.Warn.Printf("Error writing json: %+v", err)
+		}
+
+		select {
+		case <-stopWebsocket:
+			return
+		case <-sub:
+			continue
+		}
+	}
 }
 
 func oscGet(c *gin.Context) {
@@ -112,6 +146,7 @@ func main() {
 
 	r := gin.Default()
 	r.GET("/api/xairs", xairsGet)
+	r.GET("/ws/xairs", xairsWs)
 	r.GET("/api/xairs/:xair/addresses/*address", oscGet)
 	r.PATCH("/api/xairs/:xair/addresses/*address", oscPatch)
 	r.GET("/ws/xairs/:xair/addresses", oscWs)

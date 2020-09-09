@@ -50,14 +50,14 @@ func NewXAir(address string, name string, meters []int) XAir {
 }
 
 // Start polling for messages and publish when they are received.
-func (xair XAir) Start() {
+func (xair XAir) Start(terminate chan string) {
 	defer Log.Info.Printf("Connection to %s closed.", xair.name)
 
 	go xair.ps.start()
 	defer xair.ps.stop()
 
 	updateSub := xair.Subscribe()
-	go xair.update(updateSub)
+	go xair.update(updateSub, terminate)
 	defer xair.Unsubscribe(updateSub)
 
 	stopRefresh := make(chan struct{})
@@ -91,7 +91,7 @@ func (xair XAir) refresh(stop chan struct{}) {
 	}
 }
 
-func (xair XAir) update(sub chan Message) {
+func (xair XAir) update(sub chan Message, terminate chan string) {
 	defer Log.Debug.Printf("%s update goroutine terminated.", xair.name)
 
 	timeout := time.NewTicker(1 * time.Second)
@@ -99,7 +99,7 @@ func (xair XAir) update(sub chan Message) {
 		select {
 		case v := <-timeout.C:
 			Log.Info.Printf("Timeout from %s: %s.", xair.name, v)
-			xair.Close()
+			terminate <- xair.name
 		case msg, ok := <-sub:
 			if !ok {
 				return
