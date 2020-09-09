@@ -10,7 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var xairs = make(map[string]XAir)
+var scanner = NewScanner()
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -20,7 +20,7 @@ var upgrader = websocket.Upgrader{
 
 func xairsGet(c *gin.Context) {
 	var keys []string
-	for key := range xairs {
+	for key := range scanner.xairs {
 		keys = append(keys, key)
 	}
 
@@ -30,7 +30,7 @@ func xairsGet(c *gin.Context) {
 }
 
 func oscGet(c *gin.Context) {
-	xair := xairs[c.Param("xair")]
+	xair := scanner.xairs[c.Param("xair")]
 	address := c.Param("address")
 
 	msg, err := xair.Get(address)
@@ -48,7 +48,7 @@ func oscGet(c *gin.Context) {
 }
 
 func oscPatch(c *gin.Context) {
-	xair := xairs[c.Param("xair")]
+	xair := scanner.xairs[c.Param("xair")]
 
 	data, err := c.GetRawData()
 	if err != nil {
@@ -67,7 +67,7 @@ func oscPatch(c *gin.Context) {
 }
 
 func oscWs(c *gin.Context) {
-	xair := xairs[c.Param("xair")]
+	xair := scanner.xairs[c.Param("xair")]
 
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -107,9 +107,8 @@ func oscWs(c *gin.Context) {
 }
 
 func main() {
-	xair := NewXAir("192.168.86.98:10024", "XR18-5E-91-5A", []int{2, 3, 5})
-	go xair.Start()
-	xairs["XR18-5E-91-5A"] = xair
+	go scanner.Start()
+	defer scanner.Stop()
 
 	r := gin.Default()
 	r.GET("/api/xairs", xairsGet)

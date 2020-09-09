@@ -77,7 +77,6 @@ func (xair XAir) refresh(stop chan struct{}) {
 	defer Log.Debug.Printf("%s refresh goroutine terminated.", xair.name)
 
 	for {
-		xair.send(Message{Address: "/xinfo"})
 		xair.send(Message{Address: "/xremote"})
 		for _, meter := range xair.meters {
 			xair.send(Message{Address: "/meters", Arguments: Arguments{meter}})
@@ -95,16 +94,22 @@ func (xair XAir) refresh(stop chan struct{}) {
 func (xair XAir) update(sub chan Message) {
 	defer Log.Debug.Printf("%s update goroutine terminated.", xair.name)
 
-	for msg := range sub {
-		if !strings.HasPrefix(msg.Address, "/meters/") {
-			if msg.Address == "/xinfo" {
-				Log.Debug.Printf("Received from %s: %s", xair.name, msg)
-				xair.name = msg.Arguments[1].String()
-			} else {
-				Log.Info.Printf("Received from %s: %s", xair.name, msg)
+	timeout := time.NewTicker(1 * time.Second)
+	for {
+		select {
+		case v := <-timeout.C:
+			Log.Info.Printf("Timeout from %s: %s.", xair.name, v)
+			xair.Close()
+		case msg, ok := <-sub:
+			if !ok {
+				return
 			}
 
-			xair.cache[msg.Address] = msg
+			timeout.Reset(1 * time.Second)
+			if !strings.HasPrefix(msg.Address, "/meters/") {
+				Log.Info.Printf("Received from %s: %s", xair.name, msg)
+				xair.cache[msg.Address] = msg
+			}
 		}
 	}
 }
