@@ -86,6 +86,8 @@ func (scanner Scanner) publish(pub chan string) {
 
 // List detected XAir devices.
 func (scanner Scanner) List() []string {
+	scanner.mux.Lock()
+	defer scanner.mux.Unlock()
 	xairs := make([]string, 0, len(scanner.xairs))
 	for name := range scanner.xairs {
 		xairs = append(xairs, name)
