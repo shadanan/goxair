@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -27,7 +28,7 @@ func xairsGet(c *gin.Context) {
 func xairsWs(c *gin.Context) {
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		Log.Warn.Printf("Failed to upgrade websocket: %+v", err)
+		Log.Error.Printf("Failed to upgrade websocket: %+v", err)
 		return
 	}
 	defer ws.Close()
@@ -51,7 +52,7 @@ func xairsWs(c *gin.Context) {
 			"xairs": scanner.List(),
 		})
 		if err != nil {
-			Log.Warn.Printf("Error writing json: %+v", err)
+			Log.Error.Printf("Error writing json: %+v", err)
 		}
 
 		select {
@@ -105,7 +106,7 @@ func oscWs(c *gin.Context) {
 
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		Log.Warn.Printf("Failed to upgrade websocket: %+v", err)
+		Log.Error.Printf("Failed to upgrade websocket: %+v", err)
 		return
 	}
 	defer ws.Close()
@@ -134,7 +135,7 @@ func oscWs(c *gin.Context) {
 				"arguments": msg.Arguments,
 			})
 			if err != nil {
-				Log.Warn.Printf("Error writing json: %+v", err)
+				Log.Error.Printf("Error writing json: %+v", err)
 			}
 		}
 	}
@@ -145,6 +146,24 @@ func main() {
 	defer scanner.Stop()
 
 	r := gin.Default()
+
+	files, err := ioutil.ReadDir("html")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	for _, file := range files {
+		path := fmt.Sprintf("html/%s", file.Name())
+		target := fmt.Sprintf("/%s", file.Name())
+		if file.Name() == "index.html" {
+			r.StaticFile("/", path)
+		} else if file.IsDir() {
+			r.Static(target, path)
+		} else {
+			r.StaticFile(target, path)
+		}
+	}
+
 	r.GET("/api/xairs", xairsGet)
 	r.GET("/ws/xairs", xairsWs)
 	r.GET("/api/xairs/:xair/addresses/*address", oscGet)

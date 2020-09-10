@@ -57,7 +57,7 @@ func (scanner Scanner) Stop() {
 
 // Subscribe to updates when XAir devices are detected.
 func (scanner Scanner) Subscribe() chan string {
-	sub := make(chan string)
+	sub := make(chan string, 10)
 
 	scanner.ps.mux.Lock()
 	scanner.ps.subs[sub] = struct{}{}
@@ -129,7 +129,7 @@ func (scanner Scanner) broadcast(stop chan struct{}) {
 	for {
 		_, err := scanner.conn.WriteTo(msg.Bytes(), baddr)
 		if err != nil {
-			panic(err.Error())
+			Log.Error.Printf("Failed to broadcast: %s", err)
 		}
 
 		select {
@@ -144,11 +144,11 @@ func (scanner Scanner) broadcast(stop chan struct{}) {
 func (scanner Scanner) detect() {
 	defer Log.Info.Printf("Scanner detect terminated.")
 
-	publish := make(chan string)
+	publish := make(chan string, 10)
 	go scanner.publish(publish)
 	defer close(publish)
 
-	terminate := make(chan string)
+	terminate := make(chan string, 10)
 	go scanner.unregister(publish, terminate)
 	defer close(terminate)
 

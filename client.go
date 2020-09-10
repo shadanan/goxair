@@ -123,13 +123,13 @@ func (xair XAir) Close() {
 // Subscribe to messages received from the XAir device.
 func (xair XAir) Subscribe() chan Message {
 	ch := xair.ps.subscribe()
-	Log.Info.Printf("Subscribing %p to %s.", ch, xair.name)
+	Log.Debug.Printf("Subscribing %p to %s.", ch, xair.name)
 	return ch
 }
 
 // Unsubscribe from messages from the XAir device.
 func (xair XAir) Unsubscribe(ch chan Message) {
-	Log.Info.Printf("Unsubscribing %p from %s.", ch, xair.name)
+	Log.Debug.Printf("Unsubscribing %p from %s.", ch, xair.name)
 	xair.ps.unsubscribe(ch)
 }
 
@@ -168,7 +168,7 @@ func (xair XAir) send(msg Message) {
 	Log.Debug.Printf("Send to %s: %s", xair.name, msg)
 	_, err := xair.conn.Write(msg.Bytes())
 	if err != nil {
-		Log.Warn.Printf("Cannot send to %s because connection is closed.", xair.name)
+		Log.Error.Printf("Cannot send to %s because connection is closed.", xair.name)
 	}
 }
 
@@ -220,9 +220,9 @@ func decodeMeter(blob []byte) []Argument {
 
 func newPubsub() pubsub {
 	return pubsub{
-		pub:   make(chan Message),
-		sub:   make(chan chan Message),
-		unsub: make(chan chan Message),
+		pub:   make(chan Message, 10),
+		sub:   make(chan chan Message, 10),
+		unsub: make(chan chan Message, 10),
 		st:    make(chan struct{}),
 	}
 }
@@ -236,17 +236,14 @@ func (ps pubsub) start() {
 			subs[sub] = struct{}{}
 		case sub := <-ps.unsub:
 			delete(subs, sub)
+			close(sub)
 		case msg := <-ps.pub:
 			for sub := range subs {
 				sub <- msg
 			}
 		case <-ps.st:
-			for sub := range subs {
-				close(sub)
-			}
 			close(ps.pub)
 			close(ps.sub)
-			close(ps.unsub)
 			return
 		}
 	}
@@ -257,14 +254,13 @@ func (ps pubsub) publish(msg Message) {
 }
 
 func (ps pubsub) subscribe() chan Message {
-	ch := make(chan Message)
+	ch := make(chan Message, 10)
 	ps.sub <- ch
 	return ch
 }
 
 func (ps pubsub) unsubscribe(ch chan Message) {
 	ps.unsub <- ch
-	close(ch)
 }
 
 func (ps pubsub) stop() {
