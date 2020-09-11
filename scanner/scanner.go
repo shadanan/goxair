@@ -3,7 +3,6 @@ package scanner
 import (
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/shadanan/goxair/log"
@@ -14,56 +13,109 @@ import (
 
 // Scanner scans for XAir devices on the network.
 type Scanner struct {
-	xairs map[string]xair.XAir
-	conn  *net.UDPConn
-	mux   *sync.Mutex
-	ps    pubsub.String
+	ps   pubsub.String
+	list chan chan string
+	get  chan getRequest
+	st   chan struct{}
+}
+
+type registration struct {
+	address string
+	name    string
+}
+
+type getRequest struct {
+	ch   chan xair.XAir
+	name string
 }
 
 // NewScanner creates a new XAir device scanner.
 func NewScanner() Scanner {
-	xairs := make(map[string]xair.XAir)
+	return Scanner{
+		ps:   pubsub.NewString(),
+		list: make(chan chan string),
+		get:  make(chan getRequest),
+		st:   make(chan struct{}),
+	}
+}
+
+// Start scanning for XAir devices.
+func (scanner Scanner) Start() {
+	defer log.Info.Printf("XAir scanner stopped.")
+
+	go scanner.ps.Start()
+	defer scanner.ps.Stop()
 
 	conn, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		panic(err.Error())
 	}
 
-	mux := &sync.Mutex{}
-	ps := pubsub.NewString()
-
-	return Scanner{xairs, conn, mux, ps}
-}
-
-// Start scanning for XAir devices.
-func (scanner Scanner) Start() {
 	stopBroadcast := make(chan struct{})
 	defer close(stopBroadcast)
-	go scanner.broadcast(stopBroadcast)
+	go broadcast(stopBroadcast, conn)
 
-	scanner.detect()
+	reg := make(chan registration, 10)
+	unreg := make(chan string, 10)
+	go detect(conn, reg)
+
+	xairs := make(map[string]xair.XAir)
+
+	for {
+		select {
+		case reg := <-reg:
+			if _, ok := xairs[reg.name]; !ok {
+				log.Info.Printf("Register %s at %s.", reg.name, reg.address)
+				xa := xair.NewXAir(reg.address, reg.name, []int{2, 3, 5})
+				go xa.Start(unreg)
+				xairs[reg.name] = xa
+				scanner.ps.Publish(reg.name)
+			}
+		case name := <-unreg:
+			if xa, ok := xairs[name]; ok {
+				log.Info.Printf("Unregister %s.", name)
+				xa.Close()
+				delete(xairs, name)
+				scanner.ps.Publish(name)
+			}
+		case ch := <-scanner.list:
+			for name := range xairs {
+				ch <- name
+			}
+			close(ch)
+		case req := <-scanner.get:
+			req.ch <- xairs[req.name]
+			close(req.ch)
+		case <-scanner.st:
+			conn.Close()
+			return
+		}
+	}
 }
 
 // Stop scanning for XAir devices.
 func (scanner Scanner) Stop() {
-	log.Info.Printf("Stopping scanner.")
-	scanner.conn.Close()
+	close(scanner.st)
 }
 
 // List detected XAir devices.
 func (scanner Scanner) List() []string {
-	scanner.mux.Lock()
-	defer scanner.mux.Unlock()
-	xairs := make([]string, 0, len(scanner.xairs))
-	for name := range scanner.xairs {
-		xairs = append(xairs, name)
+	ch := make(chan string)
+	scanner.list <- ch
+
+	xairs := make([]string, 0)
+	for xa := range ch {
+		xairs = append(xairs, xa)
 	}
+
 	return xairs
 }
 
 // Get the XAir device by name.
 func (scanner Scanner) Get(name string) xair.XAir {
-	return scanner.xairs[name]
+	ch := make(chan xair.XAir)
+	scanner.get <- getRequest{ch, name}
+	return <-ch
 }
 
 // Subscribe to updates when XAir devices are detected.
@@ -79,39 +131,14 @@ func (scanner Scanner) Unsubscribe(sub chan string) {
 	log.Info.Printf("Unsubscribed %v from XAir scanner.", sub)
 }
 
-func (scanner Scanner) register(address string, name string, terminate chan string) {
-	if _, ok := scanner.xairs[name]; !ok {
-		log.Info.Printf("Register %s at %s.", name, address)
-		xa := xair.NewXAir(address, name, []int{2, 3, 5})
-		go xa.Start(terminate)
-		scanner.mux.Lock()
-		scanner.xairs[name] = xa
-		scanner.mux.Unlock()
-		scanner.ps.Publish(name)
-	}
-}
-
-func (scanner Scanner) unregister(terminate chan string) {
-	for name := range terminate {
-		if xa, ok := scanner.xairs[name]; ok {
-			log.Info.Printf("Unregister %s.", name)
-			xa.Close()
-			scanner.mux.Lock()
-			delete(scanner.xairs, name)
-			scanner.mux.Unlock()
-			scanner.ps.Publish(name)
-		}
-	}
-}
-
-func (scanner Scanner) broadcast(stop chan struct{}) {
+func broadcast(stop chan struct{}, conn *net.UDPConn) {
 	defer log.Info.Printf("Scanner broadcast terminated.")
 
 	msg := osc.Message{Address: "/xinfo"}
 	baddr := &net.UDPAddr{IP: net.IPv4bcast, Port: 10024}
 
 	for {
-		_, err := scanner.conn.WriteTo(msg.Bytes(), baddr)
+		_, err := conn.WriteTo(msg.Bytes(), baddr)
 		if err != nil {
 			log.Error.Printf("Failed to broadcast: %s", err)
 		}
@@ -125,20 +152,13 @@ func (scanner Scanner) broadcast(stop chan struct{}) {
 	}
 }
 
-func (scanner Scanner) detect() {
+func detect(conn *net.UDPConn, reg chan registration) {
 	defer log.Info.Printf("Scanner detect terminated.")
-
-	go scanner.ps.Start()
-	defer scanner.ps.Stop()
-
-	terminate := make(chan string, 10)
-	go scanner.unregister(terminate)
-	defer close(terminate)
 
 	for {
 		data := make([]byte, 65535)
 
-		_, err := scanner.conn.Read(data)
+		_, err := conn.Read(data)
 		if err != nil {
 			return
 		}
@@ -161,6 +181,9 @@ func (scanner Scanner) detect() {
 			panic(err.Error())
 		}
 
-		scanner.register(fmt.Sprintf("%s:10024", address), name, terminate)
+		reg <- registration{
+			address: fmt.Sprintf("%s:10024", address),
+			name:    name,
+		}
 	}
 }

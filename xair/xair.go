@@ -113,7 +113,6 @@ func (xair XAir) update(sub chan osc.Message, terminate chan string) {
 
 // Close the connection to the XAir and shutdown all channels.
 func (xair XAir) Close() {
-	log.Info.Printf("Closing connection to %s.", xair.Name)
 	xair.conn.Close()
 }
 
