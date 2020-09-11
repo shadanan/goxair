@@ -11,22 +11,16 @@ import (
 
 	"github.com/shadanan/goxair/log"
 	"github.com/shadanan/goxair/osc"
+	"github.com/shadanan/goxair/pubsub"
 )
 
 // XAir client
 type XAir struct {
 	Name   string
 	conn   *net.UDPConn
-	ps     pubsub
+	ps     pubsub.Message
 	cache  map[string]osc.Message
 	meters osc.Arguments
-}
-
-type pubsub struct {
-	pub   chan osc.Message
-	sub   chan chan osc.Message
-	unsub chan chan osc.Message
-	st    chan struct{}
 }
 
 // NewXAir creates a new XAir client.
@@ -41,7 +35,7 @@ func NewXAir(address string, name string, meters []int) XAir {
 		panic(err.Error())
 	}
 
-	ps := newPubsub()
+	ps := pubsub.NewMessage(10)
 	cache := make(map[string]osc.Message)
 
 	meterArgs := make([]osc.Argument, len(meters))
@@ -56,8 +50,8 @@ func NewXAir(address string, name string, meters []int) XAir {
 func (xair XAir) Start(terminate chan string) {
 	defer log.Info.Printf("Connection to %s closed.", xair.Name)
 
-	go xair.ps.start()
-	defer xair.ps.stop()
+	go xair.ps.Start()
+	defer xair.ps.Stop()
 
 	updateSub := xair.Subscribe()
 	go xair.update(updateSub, terminate)
@@ -72,7 +66,7 @@ func (xair XAir) Start(terminate chan string) {
 		if errors.Is(err, ErrConnClosed) {
 			return
 		}
-		xair.ps.publish(msg)
+		xair.ps.Publish(msg)
 	}
 }
 
@@ -125,7 +119,7 @@ func (xair XAir) Close() {
 
 // Subscribe to messages received from the XAir device.
 func (xair XAir) Subscribe() chan osc.Message {
-	ch := xair.ps.subscribe()
+	ch := xair.ps.Subscribe()
 	log.Debug.Printf("Subscribing %p to %s.", ch, xair.Name)
 	return ch
 }
@@ -133,7 +127,7 @@ func (xair XAir) Subscribe() chan osc.Message {
 // Unsubscribe from messages from the XAir device.
 func (xair XAir) Unsubscribe(ch chan osc.Message) {
 	log.Debug.Printf("Unsubscribing %p from %s.", ch, xair.Name)
-	xair.ps.unsubscribe(ch)
+	xair.ps.Unsubscribe(ch)
 }
 
 // Get the value of an address on the XAir device.
@@ -219,51 +213,4 @@ func decodeMeter(blob []byte) []osc.Argument {
 	}
 
 	return meter
-}
-
-func newPubsub() pubsub {
-	return pubsub{
-		pub:   make(chan osc.Message, 10),
-		sub:   make(chan chan osc.Message, 10),
-		unsub: make(chan chan osc.Message, 10),
-		st:    make(chan struct{}),
-	}
-}
-
-// Start the PubSub go routine.
-func (ps pubsub) start() {
-	subs := make(map[chan osc.Message]struct{})
-	for {
-		select {
-		case sub := <-ps.sub:
-			subs[sub] = struct{}{}
-		case sub := <-ps.unsub:
-			delete(subs, sub)
-			close(sub)
-		case msg := <-ps.pub:
-			for sub := range subs {
-				sub <- msg
-			}
-		case <-ps.st:
-			return
-		}
-	}
-}
-
-func (ps pubsub) publish(msg osc.Message) {
-	ps.pub <- msg
-}
-
-func (ps pubsub) subscribe() chan osc.Message {
-	ch := make(chan osc.Message, 10)
-	ps.sub <- ch
-	return ch
-}
-
-func (ps pubsub) unsubscribe(ch chan osc.Message) {
-	ps.unsub <- ch
-}
-
-func (ps pubsub) stop() {
-	close(ps.st)
 }

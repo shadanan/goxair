@@ -133,7 +133,11 @@ func oscWs(c *gin.Context) {
 		select {
 		case <-stopWebsocket:
 			return
-		case msg := <-sub:
+		case msg, ok := <-sub:
+			if !ok {
+				return
+			}
+
 			err := ws.WriteJSON(gin.H{
 				"address":   msg.Address,
 				"arguments": msg.Arguments,

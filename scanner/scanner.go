@@ -8,6 +8,7 @@ import (
 
 	"github.com/shadanan/goxair/log"
 	"github.com/shadanan/goxair/osc"
+	"github.com/shadanan/goxair/pubsub"
 	"github.com/shadanan/goxair/xair"
 )
 
@@ -16,7 +17,7 @@ type Scanner struct {
 	xairs map[string]xair.XAir
 	conn  *net.UDPConn
 	mux   *sync.Mutex
-	ps    pubsub
+	ps    pubsub.String
 }
 
 // NewScanner creates a new XAir device scanner.
@@ -29,7 +30,7 @@ func NewScanner() Scanner {
 	}
 
 	mux := &sync.Mutex{}
-	ps := newPubsub()
+	ps := pubsub.NewString()
 
 	return Scanner{xairs, conn, mux, ps}
 }
@@ -67,16 +68,15 @@ func (scanner Scanner) Get(name string) xair.XAir {
 
 // Subscribe to updates when XAir devices are detected.
 func (scanner Scanner) Subscribe() chan string {
-	sub := make(chan string, 10)
-	scanner.ps.sub <- sub
-	log.Info.Printf("Subscribing %v to XAir scanner.", sub)
+	sub := scanner.ps.Subscribe()
+	log.Info.Printf("Subscribed %v to XAir scanner.", sub)
 	return sub
 }
 
 // Unsubscribe from updates when XAir devices are detected.
 func (scanner Scanner) Unsubscribe(sub chan string) {
-	scanner.ps.unsub <- sub
-	log.Info.Printf("Unsubscribing %v from XAir scanner.", sub)
+	scanner.ps.Unsubscribe(sub)
+	log.Info.Printf("Unsubscribed %v from XAir scanner.", sub)
 }
 
 func (scanner Scanner) register(address string, name string, terminate chan string) {
@@ -87,7 +87,7 @@ func (scanner Scanner) register(address string, name string, terminate chan stri
 		scanner.mux.Lock()
 		scanner.xairs[name] = xa
 		scanner.mux.Unlock()
-		scanner.ps.publish(name)
+		scanner.ps.Publish(name)
 	}
 }
 
@@ -99,7 +99,7 @@ func (scanner Scanner) unregister(terminate chan string) {
 			scanner.mux.Lock()
 			delete(scanner.xairs, name)
 			scanner.mux.Unlock()
-			scanner.ps.publish(name)
+			scanner.ps.Publish(name)
 		}
 	}
 }
@@ -125,55 +125,11 @@ func (scanner Scanner) broadcast(stop chan struct{}) {
 	}
 }
 
-type pubsub struct {
-	pub   chan string
-	sub   chan chan string
-	unsub chan chan string
-	st    chan struct{}
-}
-
-func newPubsub() pubsub {
-	return pubsub{
-		pub:   make(chan string),
-		sub:   make(chan chan string),
-		unsub: make(chan chan string),
-		st:    make(chan struct{}),
-	}
-}
-
-func (ps pubsub) start() {
-	subs := make(map[chan string]bool)
-
-	for {
-		select {
-		case name := <-ps.pub:
-			for sub := range subs {
-				sub <- name
-			}
-		case sub := <-ps.sub:
-			subs[sub] = true
-		case sub := <-ps.unsub:
-			delete(subs, sub)
-			close(sub)
-		case <-ps.st:
-			return
-		}
-	}
-}
-
-func (ps pubsub) publish(name string) {
-	ps.pub <- name
-}
-
-func (ps pubsub) stop() {
-	close(ps.st)
-}
-
 func (scanner Scanner) detect() {
 	defer log.Info.Printf("Scanner detect terminated.")
 
-	go scanner.ps.start()
-	defer scanner.ps.stop()
+	go scanner.ps.Start()
+	defer scanner.ps.Stop()
 
 	terminate := make(chan string, 10)
 	go scanner.unregister(terminate)
