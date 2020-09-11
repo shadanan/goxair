@@ -19,11 +19,6 @@ type Scanner struct {
 	ps    pubsub
 }
 
-type pubsub struct {
-	mux  *sync.Mutex
-	subs map[chan string]struct{}
-}
-
 // NewScanner creates a new XAir device scanner.
 func NewScanner() Scanner {
 	xairs := make(map[string]xair.XAir)
@@ -34,11 +29,7 @@ func NewScanner() Scanner {
 	}
 
 	mux := &sync.Mutex{}
-
-	ps := pubsub{
-		mux:  &sync.Mutex{},
-		subs: make(map[chan string]struct{}),
-	}
+	ps := newPubsub()
 
 	return Scanner{xairs, conn, mux, ps}
 }
@@ -58,35 +49,6 @@ func (scanner Scanner) Stop() {
 	scanner.conn.Close()
 }
 
-// Subscribe to updates when XAir devices are detected.
-func (scanner Scanner) Subscribe() chan string {
-	sub := make(chan string, 10)
-
-	scanner.ps.mux.Lock()
-	scanner.ps.subs[sub] = struct{}{}
-	scanner.ps.mux.Unlock()
-
-	log.Info.Printf("Subscribing %v to XAir scanner.", sub)
-	return sub
-}
-
-// Unsubscribe from updates when XAir devices are detected.
-func (scanner Scanner) Unsubscribe(sub chan string) {
-	scanner.ps.mux.Lock()
-	delete(scanner.ps.subs, sub)
-	scanner.ps.mux.Unlock()
-
-	log.Info.Printf("Unsubscribing %v from XAir scanner.", sub)
-}
-
-func (scanner Scanner) publish(pub chan string) {
-	for name := range pub {
-		for sub := range scanner.ps.subs {
-			sub <- name
-		}
-	}
-}
-
 // List detected XAir devices.
 func (scanner Scanner) List() []string {
 	scanner.mux.Lock()
@@ -103,7 +65,21 @@ func (scanner Scanner) Get(name string) xair.XAir {
 	return scanner.xairs[name]
 }
 
-func (scanner Scanner) register(address string, name string, publish chan string, terminate chan string) {
+// Subscribe to updates when XAir devices are detected.
+func (scanner Scanner) Subscribe() chan string {
+	sub := make(chan string, 10)
+	scanner.ps.sub <- sub
+	log.Info.Printf("Subscribing %v to XAir scanner.", sub)
+	return sub
+}
+
+// Unsubscribe from updates when XAir devices are detected.
+func (scanner Scanner) Unsubscribe(sub chan string) {
+	scanner.ps.unsub <- sub
+	log.Info.Printf("Unsubscribing %v from XAir scanner.", sub)
+}
+
+func (scanner Scanner) register(address string, name string, terminate chan string) {
 	if _, ok := scanner.xairs[name]; !ok {
 		log.Info.Printf("Register %s at %s.", name, address)
 		xa := xair.NewXAir(address, name, []int{2, 3, 5})
@@ -111,11 +87,11 @@ func (scanner Scanner) register(address string, name string, publish chan string
 		scanner.mux.Lock()
 		scanner.xairs[name] = xa
 		scanner.mux.Unlock()
-		publish <- name
+		scanner.ps.publish(name)
 	}
 }
 
-func (scanner Scanner) unregister(publish chan string, terminate chan string) {
+func (scanner Scanner) unregister(terminate chan string) {
 	for name := range terminate {
 		if xa, ok := scanner.xairs[name]; ok {
 			log.Info.Printf("Unregister %s.", name)
@@ -123,7 +99,7 @@ func (scanner Scanner) unregister(publish chan string, terminate chan string) {
 			scanner.mux.Lock()
 			delete(scanner.xairs, name)
 			scanner.mux.Unlock()
-			publish <- name
+			scanner.ps.publish(name)
 		}
 	}
 }
@@ -149,15 +125,58 @@ func (scanner Scanner) broadcast(stop chan struct{}) {
 	}
 }
 
+type pubsub struct {
+	pub   chan string
+	sub   chan chan string
+	unsub chan chan string
+	st    chan struct{}
+}
+
+func newPubsub() pubsub {
+	return pubsub{
+		pub:   make(chan string),
+		sub:   make(chan chan string),
+		unsub: make(chan chan string),
+		st:    make(chan struct{}),
+	}
+}
+
+func (ps pubsub) start() {
+	subs := make(map[chan string]bool)
+
+	for {
+		select {
+		case name := <-ps.pub:
+			for sub := range subs {
+				sub <- name
+			}
+		case sub := <-ps.sub:
+			subs[sub] = true
+		case sub := <-ps.unsub:
+			delete(subs, sub)
+			close(sub)
+		case <-ps.st:
+			return
+		}
+	}
+}
+
+func (ps pubsub) publish(name string) {
+	ps.pub <- name
+}
+
+func (ps pubsub) stop() {
+	close(ps.st)
+}
+
 func (scanner Scanner) detect() {
 	defer log.Info.Printf("Scanner detect terminated.")
 
-	publish := make(chan string, 10)
-	go scanner.publish(publish)
-	defer close(publish)
+	go scanner.ps.start()
+	defer scanner.ps.stop()
 
 	terminate := make(chan string, 10)
-	go scanner.unregister(publish, terminate)
+	go scanner.unregister(terminate)
 	defer close(terminate)
 
 	for {
@@ -186,6 +205,6 @@ func (scanner Scanner) detect() {
 			panic(err.Error())
 		}
 
-		scanner.register(fmt.Sprintf("%s:10024", address), name, publish, terminate)
+		scanner.register(fmt.Sprintf("%s:10024", address), name, terminate)
 	}
 }
