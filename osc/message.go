@@ -1,4 +1,4 @@
-package main
+package osc
 
 import (
 	"bytes"
@@ -61,8 +61,8 @@ func (msg *Message) UnmarshalJSON(data []byte) error {
 			msg.Arguments = append(msg.Arguments, Int(val))
 		case string:
 			msg.Arguments = append(msg.Arguments, String(val))
-		default:
-			Log.Error.Panicf("Unknown type for %+v.", val)
+			// default:
+			// 	Log.Error.Panicf("Unknown type for %+v.", val)
 		}
 	}
 	return nil

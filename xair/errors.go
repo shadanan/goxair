@@ -1,4 +1,4 @@
-package main
+package xair
 
 import "github.com/pkg/errors"
 

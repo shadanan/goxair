@@ -1,4 +1,4 @@
-package main
+package osc
 
 import (
 	"bytes"

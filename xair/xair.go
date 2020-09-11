@@ -1,4 +1,4 @@
-package main
+package xair
 
 import (
 	"bytes"
@@ -8,21 +8,24 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/shadanan/goxair/log"
+	"github.com/shadanan/goxair/osc"
 )
 
 // XAir client
 type XAir struct {
+	Name   string
 	conn   *net.UDPConn
 	ps     pubsub
-	cache  map[string]Message
-	name   string
-	meters Arguments
+	cache  map[string]osc.Message
+	meters osc.Arguments
 }
 
 type pubsub struct {
-	pub   chan Message
-	sub   chan chan Message
-	unsub chan chan Message
+	pub   chan osc.Message
+	sub   chan chan osc.Message
+	unsub chan chan osc.Message
 	st    chan struct{}
 }
 
@@ -39,19 +42,19 @@ func NewXAir(address string, name string, meters []int) XAir {
 	}
 
 	ps := newPubsub()
-	cache := make(map[string]Message)
+	cache := make(map[string]osc.Message)
 
-	meterArgs := make([]Argument, len(meters))
+	meterArgs := make([]osc.Argument, len(meters))
 	for i, meter := range meters {
-		meterArgs[i] = String(fmt.Sprintf("/meters/%d", meter))
+		meterArgs[i] = osc.String(fmt.Sprintf("/meters/%d", meter))
 	}
 
-	return XAir{conn, ps, cache, name, meterArgs}
+	return XAir{name, conn, ps, cache, meterArgs}
 }
 
 // Start polling for messages and publish when they are received.
 func (xair XAir) Start(terminate chan string) {
-	defer Log.Info.Printf("Connection to %s closed.", xair.name)
+	defer log.Info.Printf("Connection to %s closed.", xair.Name)
 
 	go xair.ps.start()
 	defer xair.ps.stop()
@@ -74,12 +77,12 @@ func (xair XAir) Start(terminate chan string) {
 }
 
 func (xair XAir) refresh(stop chan struct{}) {
-	defer Log.Debug.Printf("%s refresh goroutine terminated.", xair.name)
+	defer log.Debug.Printf("%s refresh goroutine terminated.", xair.Name)
 
 	for {
-		xair.send(Message{Address: "/xremote"})
+		xair.send(osc.Message{Address: "/xremote"})
 		for _, meter := range xair.meters {
-			xair.send(Message{Address: "/meters", Arguments: Arguments{meter}})
+			xair.send(osc.Message{Address: "/meters", Arguments: osc.Arguments{meter}})
 		}
 
 		select {
@@ -91,15 +94,15 @@ func (xair XAir) refresh(stop chan struct{}) {
 	}
 }
 
-func (xair XAir) update(sub chan Message, terminate chan string) {
-	defer Log.Debug.Printf("%s update goroutine terminated.", xair.name)
+func (xair XAir) update(sub chan osc.Message, terminate chan string) {
+	defer log.Debug.Printf("%s update goroutine terminated.", xair.Name)
 
 	timeout := time.NewTicker(1 * time.Second)
 	for {
 		select {
 		case v := <-timeout.C:
-			Log.Info.Printf("Timeout from %s: %s.", xair.name, v)
-			terminate <- xair.name
+			log.Info.Printf("Timeout from %s: %s.", xair.Name, v)
+			terminate <- xair.Name
 		case msg, ok := <-sub:
 			if !ok {
 				return
@@ -107,7 +110,7 @@ func (xair XAir) update(sub chan Message, terminate chan string) {
 
 			timeout.Reset(1 * time.Second)
 			if !strings.HasPrefix(msg.Address, "/meters/") {
-				Log.Info.Printf("Received from %s: %s", xair.name, msg)
+				log.Info.Printf("Received from %s: %s", xair.Name, msg)
 				xair.cache[msg.Address] = msg
 			}
 		}
@@ -116,70 +119,70 @@ func (xair XAir) update(sub chan Message, terminate chan string) {
 
 // Close the connection to the XAir and shutdown all channels.
 func (xair XAir) Close() {
-	Log.Info.Printf("Closing connection to %s.", xair.name)
+	log.Info.Printf("Closing connection to %s.", xair.Name)
 	xair.conn.Close()
 }
 
 // Subscribe to messages received from the XAir device.
-func (xair XAir) Subscribe() chan Message {
+func (xair XAir) Subscribe() chan osc.Message {
 	ch := xair.ps.subscribe()
-	Log.Debug.Printf("Subscribing %p to %s.", ch, xair.name)
+	log.Debug.Printf("Subscribing %p to %s.", ch, xair.Name)
 	return ch
 }
 
 // Unsubscribe from messages from the XAir device.
-func (xair XAir) Unsubscribe(ch chan Message) {
-	Log.Debug.Printf("Unsubscribing %p from %s.", ch, xair.name)
+func (xair XAir) Unsubscribe(ch chan osc.Message) {
+	log.Debug.Printf("Unsubscribing %p from %s.", ch, xair.Name)
 	xair.ps.unsubscribe(ch)
 }
 
 // Get the value of an address on the XAir device.
-func (xair XAir) Get(address string) (Message, error) {
+func (xair XAir) Get(address string) (osc.Message, error) {
 	if msg, ok := xair.cache[address]; ok {
-		Log.Info.Printf("Get on %s (cached): %s", xair.name, msg)
+		log.Info.Printf("Get on %s (cached): %s", xair.Name, msg)
 		return msg, nil
 	}
 	sub := xair.Subscribe()
 	defer xair.Unsubscribe(sub)
-	xair.send(Message{Address: address})
+	xair.send(osc.Message{Address: address})
 	for {
 		select {
 		case msg := <-sub:
 			if msg.Address == address {
-				Log.Info.Printf("Get on %s: %s", xair.name, msg)
+				log.Info.Printf("Get on %s: %s", xair.Name, msg)
 				return msg, nil
 			}
 		case <-time.After(1 * time.Second):
-			Log.Info.Printf("Get timed out on %s: %s", xair.name, address)
-			return Message{}, ErrTimeout
+			log.Info.Printf("Get timed out on %s: %s", xair.Name, address)
+			return osc.Message{}, ErrTimeout
 		}
 	}
 }
 
 // Set the value of an address on the XAir device.
-func (xair XAir) Set(address string, arguments Arguments) {
-	msg := Message{Address: address, Arguments: arguments}
-	Log.Info.Printf("Set on %s: %s", xair.name, msg)
+func (xair XAir) Set(address string, arguments osc.Arguments) {
+	msg := osc.Message{Address: address, Arguments: arguments}
+	log.Info.Printf("Set on %s: %s", xair.Name, msg)
 	xair.cache[msg.Address] = msg
 	xair.send(msg)
 }
 
-func (xair XAir) send(msg Message) {
-	Log.Debug.Printf("Send to %s: %s", xair.name, msg)
+func (xair XAir) send(msg osc.Message) {
+	log.Debug.Printf("Send to %s: %s", xair.Name, msg)
 	_, err := xair.conn.Write(msg.Bytes())
 	if err != nil {
-		Log.Error.Printf("Cannot send to %s because connection is closed.", xair.name)
+		log.Error.Printf("Cannot send to %s because connection is closed.", xair.Name)
 	}
 }
 
-func (xair XAir) receive() (Message, error) {
+func (xair XAir) receive() (osc.Message, error) {
 	data := make([]byte, 65535)
 	_, err := xair.conn.Read(data)
 	if err != nil {
-		return Message{}, ErrConnClosed
+		return osc.Message{}, ErrConnClosed
 	}
 
-	msg, err := ParseMessage(data)
+	msg, err := osc.ParseMessage(data)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -195,7 +198,7 @@ func (xair XAir) receive() (Message, error) {
 	return msg, nil
 }
 
-func decodeMeter(blob []byte) []Argument {
+func decodeMeter(blob []byte) []osc.Argument {
 	buffer := bytes.NewBuffer(blob)
 
 	var size int32
@@ -204,7 +207,7 @@ func decodeMeter(blob []byte) []Argument {
 		panic(err.Error())
 	}
 
-	meter := make([]Argument, size)
+	meter := make([]osc.Argument, size)
 	for i := 0; i < int(size); i++ {
 		var value int16
 		err := binary.Read(buffer, binary.LittleEndian, &value)
@@ -212,7 +215,7 @@ func decodeMeter(blob []byte) []Argument {
 			panic(err.Error())
 		}
 
-		meter[i] = Int(value)
+		meter[i] = osc.Int(value)
 	}
 
 	return meter
@@ -220,16 +223,16 @@ func decodeMeter(blob []byte) []Argument {
 
 func newPubsub() pubsub {
 	return pubsub{
-		pub:   make(chan Message, 10),
-		sub:   make(chan chan Message, 10),
-		unsub: make(chan chan Message, 10),
+		pub:   make(chan osc.Message, 10),
+		sub:   make(chan chan osc.Message, 10),
+		unsub: make(chan chan osc.Message, 10),
 		st:    make(chan struct{}),
 	}
 }
 
 // Start the PubSub go routine.
 func (ps pubsub) start() {
-	subs := make(map[chan Message]struct{})
+	subs := make(map[chan osc.Message]struct{})
 	for {
 		select {
 		case sub := <-ps.sub:
@@ -242,24 +245,22 @@ func (ps pubsub) start() {
 				sub <- msg
 			}
 		case <-ps.st:
-			close(ps.pub)
-			close(ps.sub)
 			return
 		}
 	}
 }
 
-func (ps pubsub) publish(msg Message) {
+func (ps pubsub) publish(msg osc.Message) {
 	ps.pub <- msg
 }
 
-func (ps pubsub) subscribe() chan Message {
-	ch := make(chan Message, 10)
+func (ps pubsub) subscribe() chan osc.Message {
+	ch := make(chan osc.Message, 10)
 	ps.sub <- ch
 	return ch
 }
 
-func (ps pubsub) unsubscribe(ch chan Message) {
+func (ps pubsub) unsubscribe(ch chan osc.Message) {
 	ps.unsub <- ch
 }
 

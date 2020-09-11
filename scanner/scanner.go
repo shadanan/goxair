@@ -1,43 +1,46 @@
-package main
+package scanner
 
 import (
 	"fmt"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/shadanan/goxair/log"
+	"github.com/shadanan/goxair/osc"
+	"github.com/shadanan/goxair/xair"
 )
 
 // Scanner scans for XAir devices on the network.
 type Scanner struct {
-	xairs map[string]XAir
+	xairs map[string]xair.XAir
 	conn  *net.UDPConn
 	mux   *sync.Mutex
-	ps    struct {
-		mux  *sync.Mutex
-		subs map[chan string]struct{}
-	}
+	ps    pubsub
+}
+
+type pubsub struct {
+	mux  *sync.Mutex
+	subs map[chan string]struct{}
 }
 
 // NewScanner creates a new XAir device scanner.
 func NewScanner() Scanner {
-	xairs := make(map[string]XAir)
+	xairs := make(map[string]xair.XAir)
 
 	conn, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		panic(err.Error())
 	}
 
-	mux := sync.Mutex{}
+	mux := &sync.Mutex{}
 
-	ps := struct {
-		mux  *sync.Mutex
-		subs map[chan string]struct{}
-	}{
-		&sync.Mutex{},
-		make(map[chan string]struct{}),
+	ps := pubsub{
+		mux:  &sync.Mutex{},
+		subs: make(map[chan string]struct{}),
 	}
 
-	return Scanner{xairs, conn, &mux, ps}
+	return Scanner{xairs, conn, mux, ps}
 }
 
 // Start scanning for XAir devices.
@@ -51,7 +54,7 @@ func (scanner Scanner) Start() {
 
 // Stop scanning for XAir devices.
 func (scanner Scanner) Stop() {
-	Log.Info.Printf("Stopping scanner.")
+	log.Info.Printf("Stopping scanner.")
 	scanner.conn.Close()
 }
 
@@ -63,7 +66,7 @@ func (scanner Scanner) Subscribe() chan string {
 	scanner.ps.subs[sub] = struct{}{}
 	scanner.ps.mux.Unlock()
 
-	Log.Info.Printf("Subscribing %v to XAir scanner.", sub)
+	log.Info.Printf("Subscribing %v to XAir scanner.", sub)
 	return sub
 }
 
@@ -73,7 +76,7 @@ func (scanner Scanner) Unsubscribe(sub chan string) {
 	delete(scanner.ps.subs, sub)
 	scanner.ps.mux.Unlock()
 
-	Log.Info.Printf("Unsubscribing %v from XAir scanner.", sub)
+	log.Info.Printf("Unsubscribing %v from XAir scanner.", sub)
 }
 
 func (scanner Scanner) publish(pub chan string) {
@@ -95,13 +98,18 @@ func (scanner Scanner) List() []string {
 	return xairs
 }
 
+// Get the XAir device by name.
+func (scanner Scanner) Get(name string) xair.XAir {
+	return scanner.xairs[name]
+}
+
 func (scanner Scanner) register(address string, name string, publish chan string, terminate chan string) {
 	if _, ok := scanner.xairs[name]; !ok {
-		Log.Info.Printf("Register %s at %s.", name, address)
-		xair := NewXAir(address, name, []int{2, 3, 5})
-		go xair.Start(terminate)
+		log.Info.Printf("Register %s at %s.", name, address)
+		xa := xair.NewXAir(address, name, []int{2, 3, 5})
+		go xa.Start(terminate)
 		scanner.mux.Lock()
-		scanner.xairs[name] = xair
+		scanner.xairs[name] = xa
 		scanner.mux.Unlock()
 		publish <- name
 	}
@@ -109,9 +117,9 @@ func (scanner Scanner) register(address string, name string, publish chan string
 
 func (scanner Scanner) unregister(publish chan string, terminate chan string) {
 	for name := range terminate {
-		if xair, ok := scanner.xairs[name]; ok {
-			Log.Info.Printf("Unregister %s.", name)
-			xair.Close()
+		if xa, ok := scanner.xairs[name]; ok {
+			log.Info.Printf("Unregister %s.", name)
+			xa.Close()
 			scanner.mux.Lock()
 			delete(scanner.xairs, name)
 			scanner.mux.Unlock()
@@ -121,15 +129,15 @@ func (scanner Scanner) unregister(publish chan string, terminate chan string) {
 }
 
 func (scanner Scanner) broadcast(stop chan struct{}) {
-	defer Log.Info.Printf("Scanner broadcast terminated.")
+	defer log.Info.Printf("Scanner broadcast terminated.")
 
-	msg := Message{Address: "/xinfo"}
+	msg := osc.Message{Address: "/xinfo"}
 	baddr := &net.UDPAddr{IP: net.IPv4bcast, Port: 10024}
 
 	for {
 		_, err := scanner.conn.WriteTo(msg.Bytes(), baddr)
 		if err != nil {
-			Log.Error.Printf("Failed to broadcast: %s", err)
+			log.Error.Printf("Failed to broadcast: %s", err)
 		}
 
 		select {
@@ -142,7 +150,7 @@ func (scanner Scanner) broadcast(stop chan struct{}) {
 }
 
 func (scanner Scanner) detect() {
-	defer Log.Info.Printf("Scanner detect terminated.")
+	defer log.Info.Printf("Scanner detect terminated.")
 
 	publish := make(chan string, 10)
 	go scanner.publish(publish)
@@ -160,7 +168,7 @@ func (scanner Scanner) detect() {
 			return
 		}
 
-		msg, err := ParseMessage(data)
+		msg, err := osc.ParseMessage(data)
 		if err != nil {
 			panic(err.Error())
 		}

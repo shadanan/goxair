@@ -9,9 +9,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/shadanan/goxair/log"
+	"github.com/shadanan/goxair/osc"
+	"github.com/shadanan/goxair/scanner"
+	"github.com/shadanan/goxair/xair"
 )
 
-var scanner = NewScanner()
+var scan = scanner.NewScanner()
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -21,14 +25,14 @@ var upgrader = websocket.Upgrader{
 
 func xairsGet(c *gin.Context) {
 	c.JSON(200, gin.H{
-		"xairs": scanner.List(),
+		"xairs": scan.List(),
 	})
 }
 
 func xairsWs(c *gin.Context) {
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		Log.Error.Printf("Failed to upgrade websocket: %+v", err)
+		log.Error.Printf("Failed to upgrade websocket: %+v", err)
 		return
 	}
 	defer ws.Close()
@@ -44,15 +48,15 @@ func xairsWs(c *gin.Context) {
 		close(stopWebsocket)
 	}()
 
-	sub := scanner.Subscribe()
-	defer scanner.Unsubscribe(sub)
+	sub := scan.Subscribe()
+	defer scan.Unsubscribe(sub)
 
 	for {
 		err := ws.WriteJSON(gin.H{
-			"xairs": scanner.List(),
+			"xairs": scan.List(),
 		})
 		if err != nil {
-			Log.Error.Printf("Error writing json: %+v", err)
+			log.Error.Printf("Error writing json: %+v", err)
 		}
 
 		select {
@@ -65,13 +69,13 @@ func xairsWs(c *gin.Context) {
 }
 
 func oscGet(c *gin.Context) {
-	xair := scanner.xairs[c.Param("xair")]
+	xa := scan.Get(c.Param("xair"))
 	address := c.Param("address")
 
-	msg, err := xair.Get(address)
-	if errors.Is(err, ErrTimeout) {
+	msg, err := xa.Get(address)
+	if errors.Is(err, xair.ErrTimeout) {
 		c.JSON(404, gin.H{
-			"error": fmt.Sprintf("%s not found on %s", address, xair.name),
+			"error": fmt.Sprintf("%s not found on %s", address, xa.Name),
 		})
 		return
 	}
@@ -83,17 +87,17 @@ func oscGet(c *gin.Context) {
 }
 
 func oscPatch(c *gin.Context) {
-	xair := scanner.xairs[c.Param("xair")]
+	xa := scan.Get(c.Param("xair"))
 
 	data, err := c.GetRawData()
 	if err != nil {
 		panic(err.Error())
 	}
 
-	msg := Message{}
+	msg := osc.Message{}
 	json.Unmarshal(data, &msg)
 
-	xair.Set(msg.Address, msg.Arguments)
+	xa.Set(msg.Address, msg.Arguments)
 
 	c.JSON(200, gin.H{
 		"address":   msg.Address,
@@ -102,11 +106,11 @@ func oscPatch(c *gin.Context) {
 }
 
 func oscWs(c *gin.Context) {
-	xair := scanner.xairs[c.Param("xair")]
+	xa := scan.Get(c.Param("xair"))
 
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		Log.Error.Printf("Failed to upgrade websocket: %+v", err)
+		log.Error.Printf("Failed to upgrade websocket: %+v", err)
 		return
 	}
 	defer ws.Close()
@@ -122,8 +126,8 @@ func oscWs(c *gin.Context) {
 		close(stopWebsocket)
 	}()
 
-	sub := xair.Subscribe()
-	defer xair.Unsubscribe(sub)
+	sub := xa.Subscribe()
+	defer xa.Unsubscribe(sub)
 
 	for {
 		select {
@@ -135,15 +139,15 @@ func oscWs(c *gin.Context) {
 				"arguments": msg.Arguments,
 			})
 			if err != nil {
-				Log.Error.Printf("Error writing json: %+v", err)
+				log.Error.Printf("Error writing json: %+v", err)
 			}
 		}
 	}
 }
 
 func main() {
-	go scanner.Start()
-	defer scanner.Stop()
+	go scan.Start()
+	defer scan.Stop()
 
 	r := gin.Default()
 

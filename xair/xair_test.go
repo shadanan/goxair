@@ -1,11 +1,13 @@
-package main
+package xair
 
 import (
 	"reflect"
 	"testing"
+
+	"github.com/shadanan/goxair/osc"
 )
 
-var helloMessage = Message{Address: "/hello"}
+var helloMessage = osc.Message{Address: "/hello"}
 
 func TestNewXAir(t *testing.T) {
 	want := "192.168.0.1:10024"
