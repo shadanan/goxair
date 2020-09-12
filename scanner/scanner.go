@@ -13,29 +13,33 @@ import (
 
 // Scanner scans for XAir devices on the network.
 type Scanner struct {
-	ps   pubsub.String
-	list chan chan string
-	get  chan getRequest
-	st   chan struct{}
+	ps    pubsub.String
+	reg   chan regmsg
+	unreg chan string
+	list  chan chan string
+	get   chan getmsg
+	st    chan struct{}
 }
 
-type registration struct {
+type regmsg struct {
 	address string
 	name    string
 }
 
-type getRequest struct {
+type getmsg struct {
 	ch   chan xair.XAir
 	name string
 }
 
 // NewScanner creates a new XAir device scanner.
-func NewScanner() Scanner {
+func NewScanner(buffer int) Scanner {
 	return Scanner{
-		ps:   pubsub.NewString(),
-		list: make(chan chan string),
-		get:  make(chan getRequest),
-		st:   make(chan struct{}),
+		ps:    pubsub.NewString(),
+		reg:   make(chan regmsg, buffer),
+		unreg: make(chan string, buffer),
+		list:  make(chan chan string, buffer),
+		get:   make(chan getmsg, buffer),
+		st:    make(chan struct{}),
 	}
 }
 
@@ -53,25 +57,22 @@ func (scanner Scanner) Start() {
 
 	stopBroadcast := make(chan struct{})
 	defer close(stopBroadcast)
-	go broadcast(stopBroadcast, conn)
-
-	reg := make(chan registration, 10)
-	unreg := make(chan string, 10)
-	go detect(conn, reg)
+	go broadcast(conn, stopBroadcast)
+	go detect(conn, scanner.reg)
 
 	xairs := make(map[string]xair.XAir)
 
 	for {
 		select {
-		case reg := <-reg:
+		case reg := <-scanner.reg:
 			if _, ok := xairs[reg.name]; !ok {
 				log.Info.Printf("Register %s at %s.", reg.name, reg.address)
 				xa := xair.NewXAir(reg.address, reg.name, []int{2, 3, 5})
-				go xa.Start(unreg)
+				go xa.Start(scanner.unreg)
 				xairs[reg.name] = xa
 				scanner.ps.Publish(reg.name)
 			}
-		case name := <-unreg:
+		case name := <-scanner.unreg:
 			if xa, ok := xairs[name]; ok {
 				log.Info.Printf("Unregister %s.", name)
 				xa.Close()
@@ -114,7 +115,7 @@ func (scanner Scanner) List() []string {
 // Get the XAir device by name.
 func (scanner Scanner) Get(name string) xair.XAir {
 	ch := make(chan xair.XAir)
-	scanner.get <- getRequest{ch, name}
+	scanner.get <- getmsg{ch, name}
 	return <-ch
 }
 
@@ -131,7 +132,7 @@ func (scanner Scanner) Unsubscribe(sub chan string) {
 	log.Info.Printf("Unsubscribed %v from XAir scanner.", sub)
 }
 
-func broadcast(stop chan struct{}, conn *net.UDPConn) {
+func broadcast(conn *net.UDPConn, stop chan struct{}) {
 	defer log.Info.Printf("Scanner broadcast terminated.")
 
 	msg := osc.Message{Address: "/xinfo"}
@@ -152,7 +153,7 @@ func broadcast(stop chan struct{}, conn *net.UDPConn) {
 	}
 }
 
-func detect(conn *net.UDPConn, reg chan registration) {
+func detect(conn *net.UDPConn, reg chan regmsg) {
 	defer log.Info.Printf("Scanner detect terminated.")
 
 	for {
@@ -181,7 +182,7 @@ func detect(conn *net.UDPConn, reg chan registration) {
 			panic(err.Error())
 		}
 
-		reg <- registration{
+		reg <- regmsg{
 			address: fmt.Sprintf("%s:10024", address),
 			name:    name,
 		}

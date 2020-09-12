@@ -15,7 +15,7 @@ import (
 	"github.com/shadanan/goxair/xair"
 )
 
-var scan = scanner.NewScanner()
+var scan = scanner.NewScanner(10)
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
