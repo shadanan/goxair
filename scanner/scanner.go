@@ -44,11 +44,11 @@ func NewScanner(buffer int) Scanner {
 }
 
 // Start scanning for XAir devices.
-func (scanner Scanner) Start() {
+func (s Scanner) Start() {
 	defer log.Info.Printf("XAir scanner stopped.")
 
-	go scanner.ps.Start()
-	defer scanner.ps.Stop()
+	go s.ps.Start()
+	defer s.ps.Stop()
 
 	conn, err := net.ListenUDP("udp", nil)
 	if err != nil {
@@ -58,36 +58,36 @@ func (scanner Scanner) Start() {
 	stopBroadcast := make(chan struct{})
 	defer close(stopBroadcast)
 	go broadcast(conn, stopBroadcast)
-	go detect(conn, scanner.reg)
+	go detect(conn, s.reg)
 
 	xairs := make(map[string]xair.XAir)
 
 	for {
 		select {
-		case reg := <-scanner.reg:
+		case reg := <-s.reg:
 			if _, ok := xairs[reg.name]; !ok {
 				log.Info.Printf("Register %s at %s.", reg.name, reg.address)
 				xa := xair.NewXAir(reg.address, reg.name, []int{2, 3, 5})
-				go xa.Start(scanner.unreg)
+				go xa.Start(s.unreg)
 				xairs[reg.name] = xa
-				scanner.ps.Publish(reg.name)
+				s.ps.Publish(reg.name)
 			}
-		case name := <-scanner.unreg:
+		case name := <-s.unreg:
 			if xa, ok := xairs[name]; ok {
 				log.Info.Printf("Unregister %s.", name)
 				xa.Close()
 				delete(xairs, name)
-				scanner.ps.Publish(name)
+				s.ps.Publish(name)
 			}
-		case ch := <-scanner.list:
+		case ch := <-s.list:
 			for name := range xairs {
 				ch <- name
 			}
 			close(ch)
-		case req := <-scanner.get:
+		case req := <-s.get:
 			req.ch <- xairs[req.name]
 			close(req.ch)
-		case <-scanner.st:
+		case <-s.st:
 			conn.Close()
 			return
 		}
@@ -95,14 +95,14 @@ func (scanner Scanner) Start() {
 }
 
 // Stop scanning for XAir devices.
-func (scanner Scanner) Stop() {
-	close(scanner.st)
+func (s Scanner) Stop() {
+	close(s.st)
 }
 
 // List detected XAir devices.
-func (scanner Scanner) List() []string {
+func (s Scanner) List() []string {
 	ch := make(chan string)
-	scanner.list <- ch
+	s.list <- ch
 
 	xairs := make([]string, 0)
 	for xa := range ch {
@@ -113,22 +113,22 @@ func (scanner Scanner) List() []string {
 }
 
 // Get the XAir device by name.
-func (scanner Scanner) Get(name string) xair.XAir {
+func (s Scanner) Get(name string) xair.XAir {
 	ch := make(chan xair.XAir)
-	scanner.get <- getmsg{ch, name}
+	s.get <- getmsg{ch, name}
 	return <-ch
 }
 
 // Subscribe to updates when XAir devices are detected.
-func (scanner Scanner) Subscribe() chan string {
-	sub := scanner.ps.Subscribe()
+func (s Scanner) Subscribe() chan string {
+	sub := s.ps.Subscribe()
 	log.Info.Printf("Subscribed %v to XAir scanner.", sub)
 	return sub
 }
 
 // Unsubscribe from updates when XAir devices are detected.
-func (scanner Scanner) Unsubscribe(sub chan string) {
-	scanner.ps.Unsubscribe(sub)
+func (s Scanner) Unsubscribe(sub chan string) {
+	s.ps.Unsubscribe(sub)
 	log.Info.Printf("Unsubscribed %v from XAir scanner.", sub)
 }
 
