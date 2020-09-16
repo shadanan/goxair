@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -149,19 +150,14 @@ func oscWs(c *gin.Context) {
 	}
 }
 
-func main() {
-	go scan.Start()
-	defer scan.Stop()
-
-	r := gin.Default()
-
-	files, err := ioutil.ReadDir("html")
+func static(r *gin.Engine, html string) {
+	files, err := ioutil.ReadDir(html)
 	if err != nil {
 		panic(err.Error())
 	}
 
 	for _, file := range files {
-		path := fmt.Sprintf("html/%s", file.Name())
+		path := fmt.Sprintf("%s/%s", html, file.Name())
 		target := fmt.Sprintf("/%s", file.Name())
 		if file.Name() == "index.html" {
 			r.StaticFile("/", path)
@@ -171,12 +167,27 @@ func main() {
 			r.StaticFile(target, path)
 		}
 	}
+}
+
+func main() {
+	r := gin.Default()
+
+	html := flag.String("html", "", "folder containing static files to serve")
+	flag.Parse()
+
+	if *html != "" {
+		log.Info.Printf("Hello")
+		static(r, *html)
+	}
 
 	r.GET("/api/xairs", xairsGet)
 	r.GET("/ws/xairs", xairsWs)
 	r.GET("/api/xairs/:xair/addresses/*address", oscGet)
 	r.PATCH("/api/xairs/:xair/addresses/*address", oscPatch)
 	r.GET("/ws/xairs/:xair/addresses", oscWs)
+
+	go scan.Start()
+	defer scan.Stop()
 
 	r.Run()
 }
