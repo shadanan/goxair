@@ -17,7 +17,7 @@ type Scanner struct {
 	reg   chan regmsg
 	unreg chan string
 	list  chan chan string
-	get   chan getmsg
+	get   chan getreq
 	st    chan struct{}
 }
 
@@ -26,9 +26,14 @@ type regmsg struct {
 	name    string
 }
 
-type getmsg struct {
-	ch   chan xair.XAir
+type getreq struct {
+	ch   chan getresp
 	name string
+}
+
+type getresp struct {
+	xair xair.XAir
+	ok   bool
 }
 
 // NewScanner creates a new XAir device scanner.
@@ -38,7 +43,7 @@ func NewScanner(buffer int) Scanner {
 		reg:   make(chan regmsg, buffer),
 		unreg: make(chan string, buffer),
 		list:  make(chan chan string, buffer),
-		get:   make(chan getmsg, buffer),
+		get:   make(chan getreq, buffer),
 		st:    make(chan struct{}),
 	}
 }
@@ -85,7 +90,8 @@ func (s Scanner) Start() {
 			}
 			close(ch)
 		case req := <-s.get:
-			req.ch <- xairs[req.name]
+			xair, ok := xairs[req.name]
+			req.ch <- getresp{xair, ok}
 			close(req.ch)
 		case <-s.st:
 			conn.Close()
@@ -113,10 +119,11 @@ func (s Scanner) List() []string {
 }
 
 // Get the XAir device by name.
-func (s Scanner) Get(name string) xair.XAir {
-	ch := make(chan xair.XAir)
-	s.get <- getmsg{ch, name}
-	return <-ch
+func (s Scanner) Get(name string) (xair.XAir, bool) {
+	ch := make(chan getresp)
+	s.get <- getreq{ch, name}
+	resp := <-ch
+	return resp.xair, resp.ok
 }
 
 // Subscribe to updates when XAir devices are detected.

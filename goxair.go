@@ -24,6 +24,16 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
+func getXAir(c *gin.Context) (xair.XAir, bool) {
+	xa, ok := scan.Get(c.Param("xair"))
+	if !ok {
+		c.JSON(404, gin.H{
+			"error": fmt.Sprintf("XAir %s not found", c.Param("xair")),
+		})
+	}
+	return xa, ok
+}
+
 func xairsGet(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"xairs": scan.List(),
@@ -70,7 +80,11 @@ func xairsWs(c *gin.Context) {
 }
 
 func oscGet(c *gin.Context) {
-	xa := scan.Get(c.Param("xair"))
+	xa, ok := getXAir(c)
+	if !ok {
+		return
+	}
+
 	address := c.Param("address")
 
 	msg, err := xa.Get(address)
@@ -88,7 +102,10 @@ func oscGet(c *gin.Context) {
 }
 
 func oscPatch(c *gin.Context) {
-	xa := scan.Get(c.Param("xair"))
+	xa, ok := getXAir(c)
+	if !ok {
+		return
+	}
 
 	data, err := c.GetRawData()
 	if err != nil {
@@ -107,7 +124,10 @@ func oscPatch(c *gin.Context) {
 }
 
 func oscWs(c *gin.Context) {
-	xa := scan.Get(c.Param("xair"))
+	xa, ok := getXAir(c)
+	if !ok {
+		return
+	}
 
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
