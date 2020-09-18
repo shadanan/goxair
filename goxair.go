@@ -197,7 +197,6 @@ func main() {
 	flag.Parse()
 
 	if *html != "" {
-		log.Info.Printf("Hello")
 		static(r, *html)
 	}
 
