@@ -193,6 +193,7 @@ func main() {
 	r := gin.Default()
 
 	html := flag.String("html", "", "folder containing static files to serve")
+	port := flag.Int("port", 8000, "the port to launch the xair proxy on")
 	flag.Parse()
 
 	if *html != "" {
@@ -209,5 +210,5 @@ func main() {
 	go scan.Start()
 	defer scan.Stop()
 
-	r.Run()
+	r.Run(fmt.Sprintf(":%d", *port))
 }
