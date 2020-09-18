@@ -91,18 +91,16 @@ func (xa XAir) refresh(stop chan struct{}) {
 func (xa XAir) update(sub chan osc.Message, terminate chan string) {
 	defer log.Debug.Printf("%s update goroutine terminated.", xa.Name)
 
-	timeout := time.NewTicker(1 * time.Second)
 	for {
 		select {
-		case v := <-timeout.C:
-			log.Info.Printf("Timeout from %s: %s.", xa.Name, v)
+		case <-time.After(1 * time.Second):
+			log.Info.Printf("Timeout from %s.", xa.Name)
 			terminate <- xa.Name
 		case msg, ok := <-sub:
 			if !ok {
 				return
 			}
 
-			timeout.Reset(1 * time.Second)
 			if !strings.HasPrefix(msg.Address, "/meters/") {
 				log.Info.Printf("Received from %s: %s", xa.Name, msg)
 				xa.cache[msg.Address] = msg
@@ -135,9 +133,12 @@ func (xa XAir) Get(address string) (osc.Message, error) {
 		log.Info.Printf("Get on %s (cached): %s", xa.Name, msg)
 		return msg, nil
 	}
+
 	sub := xa.Subscribe()
 	defer xa.Unsubscribe(sub)
+	timeout := time.After(1 * time.Second)
 	xa.send(osc.Message{Address: address})
+
 	for {
 		select {
 		case msg := <-sub:
@@ -145,7 +146,7 @@ func (xa XAir) Get(address string) (osc.Message, error) {
 				log.Info.Printf("Get on %s: %s", xa.Name, msg)
 				return msg, nil
 			}
-		case <-time.After(1 * time.Second):
+		case <-timeout:
 			log.Info.Printf("Get timed out on %s: %s", xa.Name, address)
 			return osc.Message{}, ErrTimeout
 		}
