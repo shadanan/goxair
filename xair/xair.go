@@ -19,8 +19,19 @@ type XAir struct {
 	Name   string
 	conn   *net.UDPConn
 	ps     pubsub.Message
-	cache  map[string]osc.Message
+	get    chan cacheReq
+	set    chan osc.Message
 	meters osc.Arguments
+}
+
+type cacheReq struct {
+	address string
+	ch      chan cacheResp
+}
+
+type cacheResp struct {
+	msg osc.Message
+	ok  bool
 }
 
 // NewXAir creates a new XAir client.
@@ -36,14 +47,15 @@ func NewXAir(address string, name string, meters []int) XAir {
 	}
 
 	ps := pubsub.NewMessage(10)
-	cache := make(map[string]osc.Message)
+	get := make(chan cacheReq, 10)
+	set := make(chan osc.Message, 10)
 
 	meterArgs := make([]osc.Argument, len(meters))
 	for i, meter := range meters {
 		meterArgs[i] = osc.String(fmt.Sprintf("/meters/%d", meter))
 	}
 
-	return XAir{name, conn, ps, cache, meterArgs}
+	return XAir{name, conn, ps, get, set, meterArgs}
 }
 
 // Start polling for messages and publish when they are received.
@@ -91,6 +103,8 @@ func (xa XAir) refresh(stop chan struct{}) {
 func (xa XAir) update(sub chan osc.Message, terminate chan string) {
 	defer log.Debug.Printf("%s update goroutine terminated.", xa.Name)
 
+	cache := make(map[string]osc.Message)
+
 	for {
 		select {
 		case <-time.After(1 * time.Second):
@@ -103,8 +117,13 @@ func (xa XAir) update(sub chan osc.Message, terminate chan string) {
 
 			if !strings.HasPrefix(msg.Address, "/meters/") {
 				log.Info.Printf("Received from %s: %s", xa.Name, msg)
-				xa.cache[msg.Address] = msg
+				cache[msg.Address] = msg
 			}
+		case req := <-xa.get:
+			msg, ok := cache[req.address]
+			req.ch <- cacheResp{msg, ok}
+		case msg := <-xa.set:
+			cache[msg.Address] = msg
 		}
 	}
 }
@@ -129,9 +148,12 @@ func (xa XAir) Unsubscribe(ch chan osc.Message) {
 
 // Get the value of an address on the XAir device.
 func (xa XAir) Get(address string) (osc.Message, error) {
-	if msg, ok := xa.cache[address]; ok {
-		log.Info.Printf("Get on %s (cached): %s", xa.Name, msg)
-		return msg, nil
+	ch := make(chan cacheResp)
+	xa.get <- cacheReq{address, ch}
+	resp := <-ch
+	if resp.ok {
+		log.Info.Printf("Get on %s (cached): %s", xa.Name, resp.msg)
+		return resp.msg, nil
 	}
 
 	sub := xa.Subscribe()
@@ -157,7 +179,7 @@ func (xa XAir) Get(address string) (osc.Message, error) {
 func (xa XAir) Set(address string, arguments osc.Arguments) {
 	msg := osc.Message{Address: address, Arguments: arguments}
 	log.Info.Printf("Set on %s: %s", xa.Name, msg)
-	xa.cache[msg.Address] = msg
+	xa.set <- msg
 	xa.send(msg)
 }
 
