@@ -15,14 +15,13 @@ import (
 
 // XAir client
 type XAir struct {
-	Name    string
-	address string
-	ps      pubsub.Message
-	get     chan cacheReq
-	set     chan osc.Message
-	send    chan osc.Message
-	stop    chan struct{}
-	meters  osc.Arguments
+	Name   string
+	conn   *net.UDPConn
+	ps     pubsub.Message
+	get    chan cacheReq
+	set    chan osc.Message
+	stop   chan struct{}
+	meters osc.Arguments
 }
 
 type cacheReq struct {
@@ -37,26 +36,7 @@ type cacheResp struct {
 
 // NewXAir creates a new XAir client.
 func NewXAir(address string, name string, meters []int) XAir {
-	meterArgs := make([]osc.Argument, len(meters))
-	for i, meter := range meters {
-		meterArgs[i] = osc.String(fmt.Sprintf("/meters/%d", meter))
-	}
-
-	return XAir{
-		Name:    name,
-		address: address,
-		ps:      pubsub.NewMessage(10),
-		get:     make(chan cacheReq, 10),
-		set:     make(chan osc.Message, 10),
-		send:    make(chan osc.Message, 10),
-		stop:    make(chan struct{}),
-		meters:  meterArgs,
-	}
-}
-
-// Start polling for messages and publish when they are received.
-func (xa XAir) Start(terminate chan string, timeout time.Duration) {
-	raddr, err := net.ResolveUDPAddr("udp", xa.address)
+	raddr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -66,6 +46,27 @@ func (xa XAir) Start(terminate chan string, timeout time.Duration) {
 		panic(err.Error())
 	}
 
+	conn.SetReadBuffer(1048576)
+	conn.SetWriteBuffer(1048576)
+
+	meterArgs := make([]osc.Argument, len(meters))
+	for i, meter := range meters {
+		meterArgs[i] = osc.String(fmt.Sprintf("/meters/%d", meter))
+	}
+
+	return XAir{
+		Name:   name,
+		conn:   conn,
+		ps:     pubsub.NewMessage(10),
+		get:    make(chan cacheReq, 10),
+		set:    make(chan osc.Message, 10),
+		stop:   make(chan struct{}),
+		meters: meterArgs,
+	}
+}
+
+// Start polling for messages and publish when they are received.
+func (xa XAir) Start(terminate chan string, timeout time.Duration) {
 	go xa.ps.Start()
 	defer xa.ps.Stop()
 
@@ -77,14 +78,10 @@ func (xa XAir) Start(terminate chan string, timeout time.Duration) {
 	go xa.cacher(stopCacher)
 	defer close(stopCacher)
 
-	stopRefresher := make(chan struct{})
-	go xa.refresher(stopRefresher)
-	defer close(stopRefresher)
-
-	go xa.sender(conn)
+	go xa.refresher()
 
 	for {
-		msg, err := receive(conn)
+		msg, err := xa.receive()
 		if err != nil {
 			log.Info.Printf("Connection to %s closed.", xa.Name)
 			return
@@ -126,7 +123,7 @@ func (xa XAir) Get(address string) (osc.Message, error) {
 
 	retry := 0
 	timeout := time.NewTimer(1 * time.Second)
-	xa.send <- osc.Message{Address: address}
+	xa.send(osc.Message{Address: address})
 
 	for {
 		select {
@@ -143,7 +140,7 @@ func (xa XAir) Get(address string) (osc.Message, error) {
 				return osc.Message{}, ErrTimeout
 			}
 			timeout.Reset(1 * time.Second)
-			xa.send <- osc.Message{Address: address}
+			xa.send(osc.Message{Address: address})
 		}
 	}
 }
@@ -153,20 +150,21 @@ func (xa XAir) Set(address string, arguments osc.Arguments) {
 	msg := osc.Message{Address: address, Arguments: arguments}
 	log.Info.Printf("Set on %s: %s", xa.Name, msg)
 	xa.set <- msg
-	xa.send <- msg
+	xa.send(msg)
 }
 
-func (xa XAir) refresher(stop chan struct{}) {
+func (xa XAir) refresher() {
 	defer log.Debug.Printf("%s refresher goroutine terminated.", xa.Name)
 
 	for {
-		xa.send <- osc.Message{Address: "/xremote"}
+		xa.send(osc.Message{Address: "/xremote"})
 		for _, meter := range xa.meters {
-			xa.send <- osc.Message{Address: "/meters", Arguments: osc.Arguments{meter}}
+			xa.send(osc.Message{Address: "/meters", Arguments: osc.Arguments{meter}})
 		}
 
 		select {
-		case <-stop:
+		case <-xa.stop:
+			xa.conn.Close()
 			return
 		case <-time.After(5 * time.Second):
 			continue
@@ -214,28 +212,22 @@ func (xa XAir) cacher(stop chan struct{}) {
 	}
 }
 
-func (xa XAir) sender(conn *net.UDPConn) {
-	defer log.Debug.Printf("%s sender goroutine terminated.", xa.Name)
-
-	for {
-		select {
-		case <-xa.stop:
-			conn.Close()
-			return
-		case msg := <-xa.send:
-			log.Debug.Printf("Send to %s: %s", xa.Name, msg)
-			_, err := conn.Write(msg.Bytes())
-			if err != nil {
-				log.Error.Printf("Cannot send to %s because connection is closed.", xa.Name)
-				return
-			}
-		}
+func (xa XAir) send(msg osc.Message) error {
+	total, err := xa.conn.Write(msg.Bytes())
+	if err != nil {
+		log.Error.Printf("Cannot because connection is closed.")
+		return err
 	}
+	if total != len(msg.Bytes()) {
+		log.Error.Printf("Only wrote %d of %d bytes for: %s",
+			total, len(msg.Bytes()), msg)
+	}
+	return nil
 }
 
-func receive(conn *net.UDPConn) (osc.Message, error) {
+func (xa XAir) receive() (osc.Message, error) {
 	data := make([]byte, 65535)
-	_, err := conn.Read(data)
+	_, err := xa.conn.Read(data)
 	if err != nil {
 		return osc.Message{}, err
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	limit "github.com/aviddiviner/gin-limit"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/shadanan/goxair/log"
@@ -200,6 +201,8 @@ func main() {
 	flag.Parse()
 
 	r := gin.Default()
+	r.Use(limit.MaxAllowed(5))
+
 	if *html != "" {
 		static(r, *html)
 	}
