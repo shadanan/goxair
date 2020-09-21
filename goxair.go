@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -190,12 +191,15 @@ func static(r *gin.Engine, html string) {
 }
 
 func main() {
-	r := gin.Default()
-
-	html := flag.String("html", "", "folder containing static files to serve")
-	port := flag.Int("port", 8000, "the port to launch the xair proxy on")
+	html := flag.String("html", "",
+		"folder containing static files to serve")
+	port := flag.Int("port", 8000,
+		"the port to launch the xair proxy on")
+	timeout := flag.Duration("timeout", 10*time.Second,
+		"seconds to wait before marking XAir stale")
 	flag.Parse()
 
+	r := gin.Default()
 	if *html != "" {
 		static(r, *html)
 	}
@@ -206,7 +210,7 @@ func main() {
 	r.PATCH("/api/xairs/:xair/addresses/*address", oscPatch)
 	r.GET("/ws/xairs/:xair/addresses", oscWs)
 
-	go scan.Start()
+	go scan.Start(*timeout)
 	defer scan.Stop()
 
 	r.Run(fmt.Sprintf(":%d", *port))

@@ -49,7 +49,7 @@ func NewScanner(buffer int) Scanner {
 }
 
 // Start scanning for XAir devices.
-func (s Scanner) Start() {
+func (s Scanner) Start(timeout time.Duration) {
 	defer log.Info.Printf("XAir scanner stopped.")
 
 	go s.ps.Start()
@@ -73,7 +73,7 @@ func (s Scanner) Start() {
 			if _, ok := xairs[reg.name]; !ok {
 				log.Info.Printf("Register %s at %s.", reg.name, reg.address)
 				xa := xair.NewXAir(reg.address, reg.name, []int{2, 3, 5})
-				go xa.Start(s.unreg)
+				go xa.Start(s.unreg, timeout)
 				xairs[reg.name] = xa
 				s.ps.Publish(reg.name)
 			}

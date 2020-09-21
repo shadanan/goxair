@@ -3,7 +3,6 @@ package xair
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -59,15 +58,13 @@ func NewXAir(address string, name string, meters []int) XAir {
 }
 
 // Start polling for messages and publish when they are received.
-func (xa XAir) Start(terminate chan string) {
-	defer log.Info.Printf("Connection to %s closed.", xa.Name)
-
+func (xa XAir) Start(terminate chan string, timeout time.Duration) {
 	go xa.ps.Start()
 	defer xa.ps.Stop()
 
-	updateSub := xa.Subscribe()
-	go xa.update(updateSub, terminate)
-	defer xa.Unsubscribe(updateSub)
+	sub := xa.Subscribe()
+	go xa.update(sub, terminate, timeout)
+	defer xa.Unsubscribe(sub)
 
 	stopRefresh := make(chan struct{})
 	go xa.refresh(stopRefresh)
@@ -75,7 +72,8 @@ func (xa XAir) Start(terminate chan string) {
 
 	for {
 		msg, err := xa.receive()
-		if errors.Is(err, ErrConnClosed) {
+		if err != nil {
+			log.Info.Printf("Connection to %s closed.", xa.Name)
 			return
 		}
 		xa.ps.Publish(msg)
@@ -100,16 +98,17 @@ func (xa XAir) refresh(stop chan struct{}) {
 	}
 }
 
-func (xa XAir) update(sub chan osc.Message, terminate chan string) {
+func (xa XAir) update(sub chan osc.Message, terminate chan string, t time.Duration) {
 	defer log.Debug.Printf("%s update goroutine terminated.", xa.Name)
 
 	cache := make(map[string]osc.Message)
 
 	for {
 		select {
-		case <-time.After(1 * time.Second):
+		case <-time.After(t):
 			log.Info.Printf("Timeout from %s.", xa.Name)
 			terminate <- xa.Name
+			return
 		case msg, ok := <-sub:
 			if !ok {
 				return
@@ -158,7 +157,9 @@ func (xa XAir) Get(address string) (osc.Message, error) {
 
 	sub := xa.Subscribe()
 	defer xa.Unsubscribe(sub)
-	timeout := time.After(1 * time.Second)
+
+	retry := 0
+	timeout := time.NewTimer(1 * time.Second)
 	xa.send(osc.Message{Address: address})
 
 	for {
@@ -168,9 +169,15 @@ func (xa XAir) Get(address string) (osc.Message, error) {
 				log.Info.Printf("Get on %s: %s", xa.Name, msg)
 				return msg, nil
 			}
-		case <-timeout:
-			log.Info.Printf("Get timed out on %s: %s", xa.Name, address)
-			return osc.Message{}, ErrTimeout
+		case <-timeout.C:
+			retry++
+			log.Info.Printf("Get timed out %d time(s) on %s: %s",
+				retry, xa.Name, address)
+			if retry == 3 {
+				return osc.Message{}, ErrTimeout
+			}
+			timeout.Reset(1 * time.Second)
+			xa.send(osc.Message{Address: address})
 		}
 	}
 }
@@ -195,7 +202,7 @@ func (xa XAir) receive() (osc.Message, error) {
 	data := make([]byte, 65535)
 	_, err := xa.conn.Read(data)
 	if err != nil {
-		return osc.Message{}, ErrConnClosed
+		return osc.Message{}, err
 	}
 
 	msg, err := osc.ParseMessage(data)
