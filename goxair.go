@@ -195,7 +195,7 @@ func main() {
 		"folder containing static files to serve")
 	port := flag.Int("port", 8000,
 		"the port to launch the xair proxy on")
-	timeout := flag.Duration("timeout", 10*time.Second,
+	timeout := flag.Duration("timeout", 1*time.Second,
 		"seconds to wait before marking XAir stale")
 	flag.Parse()
 
