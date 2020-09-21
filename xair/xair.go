@@ -98,14 +98,14 @@ func (xa XAir) Close() {
 // Subscribe to messages received from the XAir device.
 func (xa XAir) Subscribe() chan osc.Message {
 	ch := xa.ps.Subscribe()
-	log.Debug.Printf("Subscribing %p to %s.", ch, xa.Name)
+	log.Info.Printf("Subscribed %p to %s.", ch, xa.Name)
 	return ch
 }
 
 // Unsubscribe from messages from the XAir device.
 func (xa XAir) Unsubscribe(ch chan osc.Message) {
-	log.Debug.Printf("Unsubscribing %p from %s.", ch, xa.Name)
 	xa.ps.Unsubscribe(ch)
+	log.Info.Printf("Unsubscribed %p from %s.", ch, xa.Name)
 }
 
 // Get the value of an address on the XAir device.

@@ -201,17 +201,20 @@ func main() {
 	flag.Parse()
 
 	r := gin.Default()
-	r.Use(limit.MaxAllowed(5))
 
 	if *html != "" {
 		static(r, *html)
 	}
 
-	r.GET("/api/xairs", xairsGet)
-	r.GET("/ws/xairs", xairsWs)
-	r.GET("/api/xairs/:xair/addresses/*address", oscGet)
-	r.PATCH("/api/xairs/:xair/addresses/*address", oscPatch)
-	r.GET("/ws/xairs/:xair/addresses", oscWs)
+	api := r.Group("/api")
+	api.Use(limit.MaxAllowed(2))
+	api.GET("/xairs", xairsGet)
+	api.GET("/xairs/:xair/addresses/*address", oscGet)
+	api.PATCH("/xairs/:xair/addresses/*address", oscPatch)
+
+	ws := r.Group("/ws")
+	ws.GET("/xairs", xairsWs)
+	ws.GET("/xairs/:xair/addresses", oscWs)
 
 	go scan.Start(*timeout)
 	defer scan.Stop()
