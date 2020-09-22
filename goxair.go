@@ -89,7 +89,10 @@ func oscGet(c *gin.Context) {
 
 	address := c.Param("address")
 
-	msg, err := xa.Get(address)
+	msg, hit, err := xa.Get(address)
+	c.Set("msg", msg)
+	c.Set("hit", hit)
+
 	if errors.Is(err, xair.ErrTimeout) {
 		c.JSON(404, gin.H{
 			"error": fmt.Sprintf("%s not found on %s", address, xa.Name),
@@ -116,6 +119,8 @@ func oscPatch(c *gin.Context) {
 
 	msg := osc.Message{}
 	json.Unmarshal(data, &msg)
+	c.Set("msg", msg)
+	c.Set("hit", false)
 
 	xa.Set(msg.Address, msg.Arguments)
 
@@ -172,7 +177,7 @@ func oscWs(c *gin.Context) {
 	}
 }
 
-func static(r *gin.Engine, html string) {
+func static(r *gin.RouterGroup, html string) {
 	files, err := ioutil.ReadDir(html)
 	if err != nil {
 		panic(err.Error())
@@ -191,6 +196,36 @@ func static(r *gin.Engine, html string) {
 	}
 }
 
+func oscLogFormatter(param gin.LogFormatterParams) string {
+	var statusColor, methodColor, resetColor string
+	if param.IsOutputColor() {
+		statusColor = param.StatusCodeColor()
+		methodColor = param.MethodColor()
+		resetColor = param.ResetColor()
+	}
+
+	if param.Latency > time.Minute {
+		param.Latency = param.Latency - param.Latency%time.Second
+	}
+
+	cached := "-"
+	if param.Keys["hit"].(bool) {
+		cached = "!"
+	}
+
+	return fmt.Sprintf("[GIN] %v |%s %3d %s| %13v | %15s |%s %-7s %s %s -%s> %s\n%s",
+		param.TimeStamp.Format("2006/01/02 - 15:04:05"),
+		statusColor, param.StatusCode, resetColor,
+		param.Latency,
+		param.ClientIP,
+		methodColor, param.Method, resetColor,
+		param.Path,
+		cached,
+		param.Keys["msg"],
+		param.ErrorMessage,
+	)
+}
+
 func main() {
 	html := flag.String("html", "",
 		"folder containing static files to serve")
@@ -200,21 +235,25 @@ func main() {
 		"seconds to wait before marking XAir stale")
 	flag.Parse()
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
+
+	all := r.Group("/")
+	all.Use(gin.Logger())
 
 	if *html != "" {
-		static(r, *html)
+		static(all, *html)
 	}
 
-	api := r.Group("/api")
-	api.Use(limit.MaxAllowed(2))
-	api.GET("/xairs", xairsGet)
-	api.GET("/xairs/:xair/addresses/*address", oscGet)
-	api.PATCH("/xairs/:xair/addresses/*address", oscPatch)
+	all.GET("/api/xairs", xairsGet)
+	all.GET("/ws/xairs", xairsWs)
+	all.GET("/ws/xairs/:xair/addresses", oscWs)
 
-	ws := r.Group("/ws")
-	ws.GET("/xairs", xairsWs)
-	ws.GET("/xairs/:xair/addresses", oscWs)
+	osc := r.Group("/api/xairs/:xair/addresses")
+	osc.Use(gin.LoggerWithFormatter(oscLogFormatter))
+	osc.Use(limit.MaxAllowed(2))
+	osc.GET("/*address", oscGet)
+	osc.PATCH("/*address", oscPatch)
 
 	go scan.Start(*timeout)
 	defer scan.Stop()

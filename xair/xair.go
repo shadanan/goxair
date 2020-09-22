@@ -98,24 +98,24 @@ func (xa XAir) Close() {
 // Subscribe to messages received from the XAir device.
 func (xa XAir) Subscribe() chan osc.Message {
 	ch := xa.ps.Subscribe()
-	log.Info.Printf("Subscribed %p to %s.", ch, xa.Name)
+	log.Debug.Printf("Subscribed %p to %s.", ch, xa.Name)
 	return ch
 }
 
 // Unsubscribe from messages from the XAir device.
 func (xa XAir) Unsubscribe(ch chan osc.Message) {
 	xa.ps.Unsubscribe(ch)
-	log.Info.Printf("Unsubscribed %p from %s.", ch, xa.Name)
+	log.Debug.Printf("Unsubscribed %p from %s.", ch, xa.Name)
 }
 
 // Get the value of an address on the XAir device.
-func (xa XAir) Get(address string) (osc.Message, error) {
+func (xa XAir) Get(address string) (osc.Message, bool, error) {
 	ch := make(chan cacheResp)
 	xa.get <- cacheReq{address, ch}
 	resp := <-ch
 	if resp.ok {
-		log.Info.Printf("Get on %s (cached): %s", xa.Name, resp.msg)
-		return resp.msg, nil
+		log.Debug.Printf("Get on %s (cached): %s", xa.Name, resp.msg)
+		return resp.msg, true, nil
 	}
 
 	sub := xa.Subscribe()
@@ -129,15 +129,15 @@ func (xa XAir) Get(address string) (osc.Message, error) {
 		select {
 		case msg := <-sub:
 			if msg.Address == address {
-				log.Info.Printf("Get on %s: %s", xa.Name, msg)
-				return msg, nil
+				log.Debug.Printf("Get on %s: %s", xa.Name, msg)
+				return msg, false, nil
 			}
 		case <-timeout.C:
 			retry++
 			log.Info.Printf("Get timed out %d time(s) on %s: %s",
 				retry, xa.Name, address)
 			if retry == 3 {
-				return osc.Message{}, ErrTimeout
+				return osc.Message{}, false, ErrTimeout
 			}
 			timeout.Reset(1 * time.Second)
 			xa.send(osc.Message{Address: address})
