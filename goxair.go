@@ -208,20 +208,23 @@ func oscLogFormatter(param gin.LogFormatterParams) string {
 		param.Latency = param.Latency - param.Latency%time.Second
 	}
 
-	cached := "-"
+	cache := ""
 	if param.Keys["hit"].(bool) {
-		cached = "!"
+		cache = " (cache)"
 	}
 
-	return fmt.Sprintf("[GIN] %v |%s %3d %s| %13v | %15s |%s %-7s %s %s -%s> %s\n%s",
-		param.TimeStamp.Format("2006/01/02 - 15:04:05"),
+	msg := param.Keys["msg"].(osc.Message)
+
+	return fmt.Sprintf(
+		"[GIN] %v |%s %3d %s| %13v | %15s |%s %-5s %s %s -> %s%s\n%s",
+		param.TimeStamp.Format("2006/01/02 15:04:05"),
 		statusColor, param.StatusCode, resetColor,
 		param.Latency,
 		param.ClientIP,
 		methodColor, param.Method, resetColor,
 		param.Path,
-		cached,
-		param.Keys["msg"],
+		msg.Arguments,
+		cache,
 		param.ErrorMessage,
 	)
 }

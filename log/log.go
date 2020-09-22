@@ -8,9 +8,9 @@ import (
 
 var (
 	// Debug log messages.
-	Debug = log.New(ioutil.Discard, "[GOX-debug]: ", log.LstdFlags|log.Lshortfile)
+	Debug = log.New(ioutil.Discard, "[GOX] ", log.LstdFlags|log.Lshortfile)
 	// Info log messages.
-	Info = log.New(os.Stdout, "[GOX-info]: ", log.LstdFlags|log.Lshortfile)
+	Info = log.New(os.Stdout, "[GOX] ", log.LstdFlags|log.Lshortfile)
 	// Error log messages.
-	Error = log.New(os.Stderr, "[GOX-error]: ", log.LstdFlags|log.Lshortfile)
+	Error = log.New(os.Stderr, "[GOX] ", log.LstdFlags|log.Lshortfile)
 )
